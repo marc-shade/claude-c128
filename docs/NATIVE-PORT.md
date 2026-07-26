@@ -14,14 +14,23 @@ about 1.6 seconds. Measurements below.
 
 Nothing has been flashed to any device.
 
+**Where the code is.** Every path below is relative to a local clone of the
+GPLv3 [`1541ultimate`](https://github.com/GideonZ/1541ultimate) firmware tree,
+which is **not part of this repository** — it is a separate project under a
+different licence, and the changes described here have not been submitted
+upstream. This document is the record of what was measured; it is not a patch
+you can apply from here.
+
 ## Why the cartridge and not the 8502
 
-The 8502 was measured out of contention first. A P-256 scalar multiplication
-needs on the order of 10^6 multiply-accumulate steps. At 1 MHz with no multiply
-instruction, a 16x16 multiply costs roughly 200 cycles in software, which puts a
-single handshake in the tens of minutes and makes session resumption pointless
-because the ticket expires first. Symmetric work (AES-GCM, SHA-384) is fine on
-a 6502; it is the asymmetric handshake that is out of reach.
+The 8502 was ruled out first, on the grounds that a P-256 handshake needs on the
+order of 10^6 multiply-accumulate steps. That was an estimate at the time; the
+instrumented count below puts it at **999,646**, so the premise held. At 1 MHz
+with no multiply instruction and a software 16×16 multiply costing on the order
+of 200 cycles, a single handshake lands in the tens of minutes, which also makes
+session resumption pointless because the ticket expires first. Symmetric work
+(AES-GCM, SHA-384) is fine on a 6502; it is the asymmetric handshake that is out
+of reach.
 
 The Ultimate II+ already has what is missing: a Nios II gen2 soft core at
 62.5 MHz running FreeRTOS and lwIP, with a working TCP stack and its own
@@ -134,10 +143,7 @@ millisecond timer with FreeRTOS ticking at 200 Hz.
 TLS derives the ECDHE private key from the RNG. A predictable pool means a
 passive eavesdropper can recover the session key and decrypt everything, with
 the connection looking perfectly normal at both ends. **Weak entropy here is
-worse than no TLS, because it looks secure.** Stirring the millisecond timer
-and a call counter — which is what the current pool does — makes values differ
-between runs but nowhere near unpredictable: a few bits per sample, and an
-attacker who knows roughly when the call was placed can bound most of it.
+worse than no TLS, because it looks secure.**
 
 ### What the clock situation actually is
 
