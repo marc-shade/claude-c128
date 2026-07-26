@@ -5,8 +5,12 @@ TLS 1.3, and the C128 has no way to do it. This document records what was
 actually measured while investigating whether the Ultimate II+ cartridge could
 do the TLS instead, removing the host from the picture.
 
-**Status: blocked on entropy, not on size or CPU.** The code exists, builds, and
-fits. It refuses to run. Why is below.
+**Status: blocked on one FPGA rebuild.** The code exists, builds, and fits in
+flash with 209 KB spare, and needs about 10 KB of RAM. It refuses to run, and
+even if it ran it would take roughly 96 seconds per handshake. Both of those come
+from the same place — the FPGA image has no entropy source and its Nios II core
+has no multiplier — and one Quartus rebuild fixes both, taking the handshake to
+about 1.6 seconds. Measurements below.
 
 Nothing has been flashed to any device.
 
@@ -226,16 +230,93 @@ and keep the stack linked. If the cartridge were ever shipped without a
 solution to entropy, those should be compiled out too so the flash is not spent
 on code that refuses to run.
 
+## Handshake cost, and the thing that actually decides this
+
+This was the open question, and answering it changes the recommendation.
+
+The CPU is the **Nios II/e economy core** — `ALT_CPU_CPU_IMPLEMENTATION "tiny"`
+in the generated BSP. No caches, no barrel shifter, and no multiplier. Because
+mbedTLS ships no nios2 assembly, its bignum code falls back to generic C, and
+GCC lowers each limb-wise multiply-accumulate to a `__muldi3` call. From the
+disassembly of the real firmware:
+
+- `__muldi3` calls `__mulsi3` **six** times: four with 16-bit first operands,
+  two with full 32-bit ones
+- `__mulsi3` is a 7-instruction shift-add loop that iterates once per bit of its
+  **first** operand — it tests `r4` — so the two full-width calls run ~32
+  iterations each even though the other operand is the zero high word of a
+  widened 32-bit value
+- total: **~999 instructions for one limb multiply-accumulate**
+
+The number of those operations is a property of the algorithm, not the host, so
+it can be counted anywhere. `hosttest/bench` instruments the real `bignum_core.c`
+and counts them for an ECDHE-ECDSA P-256 client: ephemeral keygen, ECDH shared
+secret, and two ECDSA verifications for a leaf + intermediate chain.
+
+**1,000,000 limb multiply-accumulates per handshake.** At ~999 instructions each
+that is 998.6 M instructions. At 62.5 MHz:
+
+| | instructions | @1 CPI (floor) | @6 CPI |
+|---|---|---|---|
+| as configured here | 998.6 M | 16.0 s | **95.9 s** |
+| with untrimmed ECP settings | 558.5 M | 8.9 s | 53.6 s |
+
+1 CPI is a floor no multi-cycle core can beat, so the conclusion does not depend
+on knowing the exact CPI: **even at a physically impossible 1 CPI this is 16
+seconds.** (The 6 CPI figure usually quoted for Nios II/e could not be verified
+from a local source and is labelled an assumption.)
+
+Note the second row: trimming mbedTLS to fit flash — `MBEDTLS_ECP_WINDOW_SIZE`
+from 4 down to 2, and `MBEDTLS_ECP_FIXED_POINT_OPTIM` off — costs **1.79× in
+speed**. That was a deliberate trade to fit the partition, and it is reversible
+if flash is freed elsewhere.
+
+### The same FPGA rebuild fixes both blockers
+
+Recompiling `bignum_core.c` with `-mhw-mul -mhw-mulx` and disassembling it gives
+a measured, not estimated, answer: **zero libgcc calls**. The multiply inlines to
+18 `mul`/`mulxuu` instructions and `mla` shrinks from 183 instructions plus 9
+`__muldi3` calls to 137 instructions total — at most 17 per limb, charging
+prologue and epilogue against every limb.
+
+| | instructions | @1 CPI | @6 CPI |
+|---|---|---|---|
+| hw multiply, as configured | 17.0 M | 0.27 s | **1.6 s** |
+| hw multiply, untrimmed ECP | 9.5 M | 0.15 s | 0.9 s |
+
+**A multiplier turns a 96-second handshake into roughly 1.6 seconds — a 59×
+improvement — and it is the same Quartus rebuild that would add the
+ring-oscillator TRNG.** Enabling hardware multiply in the Nios II core and
+instantiating a TRNG are both Qsys/Quartus changes to the same design.
+
+So the honest summary is not "too slow" and not "blocked on entropy". It is:
+
+- **Flash**: fits, 209 KB spare. Solved in software.
+- **RAM**: peak mbedTLS heap during the public-key work is **2.2 KB**, plus the
+  two 4 KB record buffers — about 10.2 KB before FreeRTOS task stacks. Never a
+  concern.
+- **Entropy and speed**: neither is solvable in software on this FPGA image, and
+  **both are solvable by one FPGA rebuild.** That rebuild is the whole remaining
+  project.
+
+Without touching the FPGA, this stays a research artifact: it builds, it fits,
+and it refuses to run.
+
 ## What remains unverified
 
-- **No handshake has ever run.** Everything above is build-time and
-  symbol-level verification. Whether mbedTLS 3.6 completes a TLS 1.3 handshake
-  against a real server on this core is unknown, and cannot be known while
-  `Connect()` refuses.
-- **Handshake latency is unmeasured.** A P-256 ECDHE plus chain verification on
-  a 62.5 MHz soft core with no hardware multiply is the open question. Estimates
-  were deliberately not put in this document; a QEMU `nios2` run or the real
-  device would settle it.
-- **RAM headroom during a handshake is unmeasured.** Flash fits; peak heap under
-  FreeRTOS with 4 KB record buffers has not been checked.
+- **No handshake has ever run.** Everything above is build-time, symbol-level,
+  and operation-count verification. Whether mbedTLS 3.6 completes a TLS 1.3
+  handshake against a real server on this core is unknown, and cannot be known
+  while `Connect()` refuses.
+- **The timings are computed, not observed.** The operation counts are measured
+  exactly and the per-operation instruction costs come from real disassembly, but
+  nothing was executed on a Nios II. There is no simulator available to fix this:
+  QEMU removed the nios2 target, and 10.1.5 is what this machine has. The
+  cycles-per-instruction figure is an assumption, which is why the tables give a
+  1-CPI floor — the conclusions are stated so they hold across the range.
+- **The hardware-multiply figures assume the rest of the system is unchanged.**
+  Only `bignum_core.c` was recompiled with `-mhw-mul`; a real Qsys change might
+  also alter clock frequency or add caches, in either direction.
+- **Entropy quality is unverified**, and cannot be verified off-hardware. Only
+  the accounting is tested.
 - **Nothing has been flashed.** No image has been written to any device.
