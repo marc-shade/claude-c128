@@ -2,11 +2,12 @@
 #
 # make check   host-side tests and Unicode coverage        (no hardware)
 # make emu     the real 6502 client in VICE                (no hardware)
+# make emu64   the same client on an emulated C64            (no hardware)
 # make eval    every layer, including hardware if present
 # make disk    build the client and the autobooting D64
 PYTHON ?= python3
 
-.PHONY: help check test coverage emu eval client disk audit clean install-service
+.PHONY: help check test coverage emu eval client disk audit clean install-service emu64
 
 help:
 	@grep -E '^# make' Makefile | sed 's/^# /  /'
@@ -31,6 +32,12 @@ disk: client
 
 emu: disk
 	$(PYTHON) tools/emutest.py --bootdisk client/build/claude-boot.d64 \
+	          --command "bash --norc -i" --settle 20
+
+# The C64 build has no boot sector: on real hardware the Ultimate's run_prg
+# starts C64 mode directly, so there is nothing to autoboot from.
+emu64: client
+	$(PYTHON) tools/emutest.py --machine c64 \
 	          --command "bash --norc -i" --settle 20
 
 eval:

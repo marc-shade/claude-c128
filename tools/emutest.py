@@ -19,6 +19,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 PRG = os.path.join(ROOT, "client", "build", "claude.prg")
+LBL = os.path.join(ROOT, "client", "build", "claude.lbl")
 MESA_EGL = "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
 
 sys.path.insert(0, os.path.join(ROOT, "server"))
@@ -126,9 +127,10 @@ def render(mem, cols=80, rows=25):
     return "\n".join(lines)
 
 
-def load_labels():
+def load_labels(path=None):
     """Parse the VICE label file cl65 -Ln produces: 'al 00C0DE .name'."""
-    path = os.path.join(ROOT, "client", "build", "claude.lbl")
+    if path is None:
+        path = os.path.join(ROOT, "client", "build", "claude.lbl")
     if not os.path.exists(path):
         return {}
     syms = {}
@@ -163,10 +165,21 @@ def main():
                    help="attach this d64 to drive 8 and let the C128 autoboot "
                         "it, instead of autostarting the .prg directly")
     p.add_argument("--keep", action="store_true", help="leave VICE running")
+    p.add_argument("--machine", choices=("c128", "c64"), default="c128",
+                   help="c128 runs x128 and reads the 80-column VDC; c64 runs "
+                        "x64sc and reads the VIC-II screen at $0400")
     args = p.parse_args()
 
-    if not os.path.exists(PRG):
-        print(f"client not built: {PRG}\nrun: make -C client", file=sys.stderr)
+    if args.machine == "c64":
+        emu, cols, rows = "x64sc", 40, 25
+        prg = os.path.join(ROOT, "client", "build", "claude64.prg")
+        lbl = os.path.join(ROOT, "client", "build", "claude64.lbl")
+    else:
+        emu, cols, rows = "x128", 80, 25
+        prg, lbl = PRG, LBL
+
+    if not os.path.exists(prg):
+        print(f"client not built: {prg}\nrun: make -C client", file=sys.stderr)
         return 1
 
     link_port = free_port()
@@ -184,7 +197,8 @@ def main():
         time.sleep(0.1)
 
     bridge_cmd = [sys.executable, os.path.join(ROOT, "server", "bridge.py"),
-                  "--listen", str(link_port), "--command", args.command, "--rate", str(args.rate), "-v"]
+                  "--listen", str(link_port), "--command", args.command,
+                  "--rate", str(args.rate), "--machine", args.machine, "-v"]
     if args.cwd:
         bridge_cmd += ["--cwd", args.cwd]
     log_path = os.path.join(ROOT, "bridge.log")
@@ -194,7 +208,7 @@ def main():
     time.sleep(1.2)
 
     vice = subprocess.Popen([
-        "x128", "-default",
+        emu, "-default",
         # Swiftlink mode at $DE00 on NMI: the same configuration the real
         # Ultimate II+ presents ("Modem Interface: ACIA / SwiftLink").
         "-acia1", "-acia1base", "0xDE00", "-acia1irq", "1", "-acia1mode", "1",
@@ -203,7 +217,7 @@ def main():
         "-binarymonitor", "-binarymonitoraddress", f"ip4://127.0.0.1:{mon_port}",
         "-sounddev", "dummy", "-jamaction", "0",
     ] + (["-8", os.path.abspath(args.bootdisk)] if args.bootdisk
-         else ["-autostart", PRG]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+         else ["-autostart", prg]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
     rc = 0
     try:
@@ -223,13 +237,17 @@ def main():
         mon.resume()
         time.sleep(args.settle)
 
-        vdc = banks["vdc"]
-        mem = mon.read(0x0000, 80 * 25 - 1, bank=vdc)
+        if args.machine == "c64":
+            # Ordinary RAM: the VIC-II reads its text matrix from $0400, so no
+            # bank switch and no mirror is needed.
+            mem = mon.read(0x0400, 0x0400 + cols * rows - 1)
+        else:
+            mem = mon.read(0x0000, cols * rows - 1, bank=banks["vdc"])
         mon.resume()
-        print(render(mem))
+        print(render(mem, cols))
 
         # Client-side link diagnostics, read straight out of emulated RAM.
-        syms = load_labels()
+        syms = load_labels(lbl)
         if syms:
             def peek(name, width=1):
                 addr = syms.get(name)
@@ -261,8 +279,8 @@ def main():
             mon.resume()
 
         blank = sum(1 for b in mem if b in (0x20, 0x00))
-        print(f"\nnon-blank cells: {80 * 25 - blank} / {80 * 25}")
-        if blank == 80 * 25:
+        print(f"\nnon-blank cells: {cols * rows - blank} / {cols * rows}")
+        if blank == cols * rows:
             print("SCREEN IS EMPTY - client did not paint", file=sys.stderr)
             rc = 1
     finally:

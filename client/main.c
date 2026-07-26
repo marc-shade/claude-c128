@@ -10,20 +10,44 @@
  * from the NMI ring buffer in arbitrary chunks, and a command can be split
  * across two reads.
  */
+#if defined(__C64__)
+#include <c64.h>
+#else
 #include <c128.h>
+#endif
 #include <conio.h>
 #include <stdint.h>
 
-/* --- hardware, implemented in c128hw.s ---------------------------------- */
-extern unsigned char vdcRow, vdcCol, vdcAttr, vdcLen, vdcChar;
-extern unsigned char vdcBuf[256];
+/*
+ * Two machines, one protocol. The C128 renders on the 80-column VDC and keeps
+ * the 40-column VIC-II screen as a status panel; the C64 has only the VIC-II, so
+ * that same screen is the terminal and there is no panel. Everything else -
+ * parser, flow control, modem answering, keyboard - is identical.
+ */
+#if defined(__C64__)
+#define SCR_COLS      40
+#define SCR_ROWS      25
+#define HAS_PANEL     0
+#define KEY_RESYNC    0x88      /* F7: the C64 has no HELP key */
+#define MACHINE_NAME  "c64"
+#else
+#define SCR_COLS      80
+#define SCR_ROWS      25
+#define HAS_PANEL     1
+#define KEY_RESYNC    0x84      /* C128 HELP key */
+#define MACHINE_NAME  "c128"
+#endif
 
-void vdc_init(void);
-void vdc_run(void);
-void vdc_fill(void);
-void vdc_clear(void);
-void vdc_place_cursor(void);
-void vdc_setglyph(void);
+/* --- hardware, implemented in c128hw.s ---------------------------------- */
+extern unsigned char scrRow, scrCol, scrAttr, scrLen, scrChar;
+extern unsigned char scrBuf[256];
+
+void scr_init(void);
+void scr_run(void);
+void scr_fill(void);
+void scr_clear(void);
+void scr_place_cursor(void);
+void scr_setglyph(void);
 
 void acia_init(void);
 void acia_shutdown(void);
@@ -31,7 +55,7 @@ unsigned char acia_avail(void);
 unsigned char acia_get(void);
 void acia_put(unsigned char b);
 unsigned char kb_get(void);       /* KERNAL GETIN: PETSCII key, 0 if none */
-void vdc_mirror(void);            /* copy a VDC plane into mirrorBuf */
+void scr_mirror(void);            /* copy a VDC plane into mirrorBuf */
 extern unsigned char mirrorBuf[2048];
 
 /* --- protocol ----------------------------------------------------------- */
@@ -54,8 +78,6 @@ extern unsigned char mirrorBuf[2048];
 #define CLIENT_CREDIT 0x03
 /* Must match CREDIT_UNIT in server/protocol.py. */
 #define CREDIT_UNIT   64
-
-#define KEY_HELP      0x84      /* C128 HELP key */
 
 
 #define CURSOR_HIDE 0xFF
@@ -96,6 +118,7 @@ unsigned int desyncs;   /* unrecognised opcodes seen */
    idle watchdog fires, so one desync cannot trigger a repaint storm. */
 static unsigned char resyncCooldown;
 
+#if HAS_PANEL
 /* The 40-column VIC-II companion screen is written directly; it is small and
    updated rarely, so it does not need the VDC fast path. */
 #define VIC_SCREEN ((unsigned char *)0x0400)
@@ -112,6 +135,16 @@ static void panel_write(unsigned char row, unsigned char col, unsigned char code
         VIC_COLOR[off] = panelColor;
     }
 }
+#else
+/* On the C64 that screen is the terminal itself. A panel line is accepted off
+   the wire and discarded - writing it would overwrite the text the user is
+   reading. The bridge does not send panels to a C64, so this is belt and
+   braces against a mismatched pair. */
+static void panel_write(unsigned char row, unsigned char col, unsigned char code)
+{
+    (void)row; (void)col; (void)code;
+}
+#endif
 
 /* Main-loop passes left before the bell note is released. Counting down in the
    loop rather than spinning here keeps the receive path free: a blocking delay
@@ -227,15 +260,15 @@ static void handle_byte(unsigned char b)
 
         switch (opcode) {
         case CMD_CLEAR:
-            vdcAttr = args[0];
-            vdc_clear();
+            scrAttr = args[0];
+            scr_clear();
             state = S_OPCODE;
             return;
 
         case CMD_RUN:
-            vdcRow = args[0];
-            vdcCol = args[1];
-            vdcAttr = args[2];
+            scrRow = args[0];
+            scrCol = args[1];
+            scrAttr = args[2];
             payloadNeeded = args[3];
             if (payloadNeeded == 0) {
                 state = S_OPCODE;
@@ -247,44 +280,47 @@ static void handle_byte(unsigned char b)
         case CMD_FILL:
             /* args: row, col, attr, len, char - the char is the 5th byte, and
                args[] only holds four, so it arrives in `b`. */
-            vdcRow = args[0];
-            vdcCol = args[1];
-            vdcAttr = args[2];
-            vdcLen = args[3];
-            vdcChar = b;
-            vdc_fill();
+            scrRow = args[0];
+            scrCol = args[1];
+            scrAttr = args[2];
+            scrLen = args[3];
+            scrChar = b;
+            scr_fill();
             state = S_OPCODE;
             return;
 
         case CMD_CURSOR:
             if (args[0] == CURSOR_HIDE) {
-                /* Park the cursor off-screen; the VDC has no hide bit here. */
-                vdcRow = 24;
-                vdcCol = 79;
+                /* Park the cursor in the bottom-right corner. The VDC has no
+                   hide bit, and the C64's cursor is drawn by this client. */
+                scrRow = SCR_ROWS - 1;
+                scrCol = SCR_COLS - 1;
             } else {
-                vdcRow = args[0];
-                vdcCol = args[1];
+                scrRow = args[0];
+                scrCol = args[1];
             }
-            vdc_place_cursor();
+            scr_place_cursor();
             state = S_OPCODE;
             return;
 
         case CMD_GLYPH:
             /* args[0] is the character code; the 8 bitmap rows follow. */
-            vdcChar = args[0];
+            scrChar = args[0];
             payloadNeeded = 8;
             state = S_GLYPH_PAYLOAD;
             return;
 
         case CMD_PANEL:
+#if HAS_PANEL
             if (!panelOwned) {
                 /* First panel line: wipe the client's own startup text so the
                    companion screen is entirely the bridge's to draw. */
                 panelOwned = 1;
                 clrscr();
             }
-            panelRow = args[0];
             panelColor = args[1] & 0x0F;
+#endif
+            panelRow = args[0];
             payloadNeeded = args[2];
             if (payloadNeeded == 0) {
                 state = S_OPCODE;
@@ -308,11 +344,11 @@ static void handle_byte(unsigned char b)
         }
 
     case S_PAYLOAD:
-        vdcBuf[payloadGot] = b;
+        scrBuf[payloadGot] = b;
         ++payloadGot;
         if (payloadGot >= payloadNeeded) {
-            vdcLen = payloadNeeded;
-            vdc_run();
+            scrLen = payloadNeeded;
+            scr_run();
             state = S_OPCODE;
         }
         return;
@@ -325,10 +361,10 @@ static void handle_byte(unsigned char b)
         return;
 
     case S_GLYPH_PAYLOAD:
-        vdcBuf[payloadGot] = b;
+        scrBuf[payloadGot] = b;
         ++payloadGot;
         if (payloadGot >= 8) {
-            vdc_setglyph();
+            scr_setglyph();
             state = S_OPCODE;
         }
         return;
@@ -348,7 +384,7 @@ static void pump_keyboard(void)
     /* GETIN returns PETSCII straight from the KERNAL buffer, or 0 when empty.
        Translation to terminal input happens on the Linux side. */
     while ((k = kb_get()) != 0) {
-        if (k == KEY_HELP) {
+        if (k == KEY_RESYNC) {
             /* Repaint from scratch, and re-arm the modem watcher so a bridge
                that has been restarted can ring us again. */
             state = S_OPCODE;
@@ -384,15 +420,15 @@ static unsigned char petscii_to_screen(unsigned char c)
 
 static void splash(void)
 {
-    static const char *msg = "claude code / c128 - connecting";
+    static const char *msg = "claude code / " MACHINE_NAME " - connecting";
     unsigned char i;
     for (i = 0; msg[i]; ++i)
-        vdcBuf[i] = petscii_to_screen((unsigned char)msg[i]);
-    vdcRow = 0;
-    vdcCol = 0;
-    vdcAttr = 0x0E;
-    vdcLen = i;
-    vdc_run();
+        scrBuf[i] = petscii_to_screen((unsigned char)msg[i]);
+    scrRow = 0;
+    scrCol = 0;
+    scrAttr = 0x0E;
+    scrLen = i;
+    scr_run();
 }
 
 int main(void)
@@ -406,14 +442,16 @@ int main(void)
 
        Put the editor on the 40-column screen as well, so KERNAL output cannot
        scribble on the VDC surface we are painting. */
+#if HAS_PANEL
     videomode(VIDEOMODE_40COL);
     clrscr();
     cputs("claude code / c128 bridge client\r\n");
     cputs("80-column screen is the terminal.\r\n");
     cputs("RUN/STOP + RESTORE to quit.\r\n");
+#endif
 
-    vdcAttr = 0x0E;
-    vdc_init();
+    scrAttr = 0x0E;
+    scr_init();
     splash();
     acia_init();
 
@@ -451,18 +489,18 @@ int main(void)
         if (mirrorReq) {
             if (mirrorReq == 4) {
                 /* Diagnostic: run a full clear on demand, so the host can test
-                   vdc_clear in isolation from the protocol path. */
-                vdcAttr = 0x0E;
-                vdc_clear();
+                   scr_clear in isolation from the protocol path. */
+                scrAttr = 0x0E;
+                scr_clear();
             } else if (mirrorReq == 5) {
                 /* Read VDC RAM at the address in mirrorAddrHi/Lo. */
-                vdcChar = 3;
-                vdcRow = mirrorAddrHi;
-                vdcCol = mirrorAddrLo;
-                vdc_mirror();
+                scrChar = 3;
+                scrRow = mirrorAddrHi;
+                scrCol = mirrorAddrLo;
+                scr_mirror();
             } else {
-                vdcChar = mirrorReq - 1;  /* 0 = characters, 1 = attributes */
-                vdc_mirror();
+                scrChar = mirrorReq - 1;  /* 0 = characters, 1 = attributes */
+                scr_mirror();
             }
             mirrorReq = 0;
         }
@@ -495,7 +533,9 @@ int main(void)
 
     send_control(CLIENT_BYE);
     acia_shutdown();
+#if HAS_PANEL
     videomode(VIDEOMODE_40COL);
+#endif
     clrscr();
     cputs("disconnected.\r\n");
     return 0;

@@ -2,9 +2,9 @@
 
 # claude-c128
 
-**Claude Code, running on a real Commodore 128.**
+**Claude Code, running on a real Commodore 128 — or a C64.**
 
-The C128 is the terminal — its keyboard is the input, its 80-column screen is
+The Commodore is the terminal — its keyboard is the input, its screen is
 the display. Claude Code itself runs on a Linux box behind it. Nothing is
 reimplemented and nothing is faked: the actual `claude` binary runs in a PTY,
 and what appears on the VDC is its real TUI, translated cell by cell into
@@ -136,10 +136,11 @@ cd claude-c128
 make check                       # unit tests + character coverage, no hardware
 ```
 
-Against the emulator, no C128 needed:
+Against the emulator, no Commodore needed:
 
 ```sh
-make emu                         # builds the client, runs it in VICE
+make emu                         # builds the client, runs it in VICE (C128)
+make emu64                       # the same, on a C64
 ```
 
 Against real hardware:
@@ -166,9 +167,37 @@ systemctl --user enable --now claude-c128
 
 Type on the C128. **HELP** forces a full repaint and re-arms the modem, which is
 how you reconnect after restarting the host side. **RUN/STOP + RESTORE** quits.
+On a C64 the repaint key is **F7**, since it has no HELP key.
 
-The 40-column screen shows a status panel: activity, session clock, frames sent,
-bytes on the wire, and the count of any dropped bytes.
+On the C128 the 40-column screen shows a status panel: activity, session clock,
+frames sent, bytes on the wire, and the count of any dropped bytes.
+
+### On a C64
+
+```sh
+make -C client disk64                    # build the C64 client and a disk
+python3 server/bridge.py --machine c64 --connect $CBM_ULTIMATE_HOST:3000
+```
+
+`--machine c64` is not cosmetic: it sets the PTY to 40 columns, so Claude Code
+lays *itself* out for the narrower screen rather than having 80 columns cropped.
+It also stops the bridge sending panel lines, which on a C64 would be drawn over
+the terminal — there is only one screen.
+
+Three things the VIC-II cannot do that the VDC can, all visible:
+
+- **No underline and no blink.** Colour RAM holds four bits of colour and
+  nothing else. Claude Code underlines links; on a C64 they are just text.
+- **Reverse video costs a character, not an attribute.** The client folds the
+  reverse bit into the screen code, which is how the VIC-II does it.
+- **The cursor is drawn in software.** The VDC has a hardware cursor; the VIC-II
+  does not, so the client inverts the cell — and checks the cell still holds
+  what it wrote before restoring it, so a repaint underneath cannot leave a
+  stale character behind.
+
+Forty columns is genuinely narrow. Prose, the welcome box and the logo are fine;
+diffs and long file paths get truncated by Claude Code itself. It is a real
+terminal, not a comfortable one.
 
 ## Layout
 
@@ -229,8 +258,11 @@ Known limitations:
   same API and should work, but nobody has tried it.
 - **The bell is unverified.** The command arrives and the SID registers are
   written; whether it is audible has not been confirmed.
-- **The C128's 80-column mode is required.** A C64 has no VDC, so this will not
-  work there.
+- **The C64 has no underline or blink**, and 40 columns truncates long lines.
+  See the C64 notes above.
+- **The C64 client is emulator-verified, not hardware-verified.** It renders
+  Claude Code correctly in VICE with zero dropped bytes; nobody has yet run it
+  on a physical C64 or on a C128 in C64 mode.
 
 ## Documentation
 

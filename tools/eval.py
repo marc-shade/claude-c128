@@ -69,13 +69,14 @@ def check_render():
     return (PASS if rc == 0 else FAIL), first.strip()
 
 
-def check_emulator():
-    if not os.path.exists(os.path.join(ROOT, "client", "build", "claude.prg")):
-        return SKIP, "client not built (make -C client)"
+def _emulator_run(machine, prg, use_bootdisk):
+    """Boot the compiled client for one machine and check what reached the screen."""
+    if not os.path.exists(os.path.join(ROOT, "client", "build", prg)):
+        return SKIP, f"{machine} client not built (make -C client)"
+    cmd = [sys.executable, "tools/emutest.py", "--machine", machine,
+           "--command", "bash --norc -i", "--settle", "20"]
     disk = os.path.join(ROOT, "client", "build", "claude-boot.d64")
-    cmd = [sys.executable, "tools/emutest.py", "--command", "bash --norc -i",
-           "--settle", "20"]
-    if os.path.exists(disk):
+    if use_bootdisk and os.path.exists(disk):
         cmd += ["--bootdisk", disk]
     rc, out = run(cmd, timeout=420)
     if rc != 0:
@@ -86,8 +87,24 @@ def check_emulator():
     drops = next((l for l in out.splitlines() if "_rxDropped" in l), "")
     clean = drops.split()[-1] == "0" if drops.split() else False
     if got_prompt and clean:
-        return PASS, "client rendered the shell prompt, 0 bytes dropped"
-    return FAIL, f"prompt={got_prompt} {drops.strip()}"
+        return PASS, f"{machine} client rendered the shell prompt, 0 bytes dropped"
+    return FAIL, f"{machine}: prompt={got_prompt} {drops.strip()}"
+
+
+def check_emulator():
+    """C128: 80-column VDC, booted from the autoboot disk as the real one is."""
+    return _emulator_run("c128", "claude.prg", use_bootdisk=True)
+
+
+def check_emulator_c64():
+    """C64: the same protocol onto the VIC-II's 40-column screen.
+
+    A separate layer rather than a variant of the one above, because the two
+    share main.c and a change that suits one can silently break the other - the
+    attribute handling in particular, which the C64 has to fold into the
+    character since its colour RAM has no reverse bit.
+    """
+    return _emulator_run("c64", "claude64.prg", use_bootdisk=False)
 
 
 def hardware_reachable():
@@ -136,6 +153,7 @@ CHECKS = [
     ("coverage", check_coverage, False),
     ("render", check_render, False),
     ("emulator", check_emulator, True),
+    ("emulator64", check_emulator_c64, True),
     ("hardware", check_hardware, True),
 ]
 

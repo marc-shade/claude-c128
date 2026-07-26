@@ -16,11 +16,11 @@
 ; head and tail wrap for free as single bytes.
 ; ---------------------------------------------------------------------------
 
-        .export _vdc_init, _vdc_run, _vdc_fill, _vdc_clear, _vdc_place_cursor
+        .export _scr_init, _scr_run, _scr_fill, _scr_clear, _scr_place_cursor
         .export _acia_init, _acia_get, _acia_avail, _acia_put, _acia_shutdown
         .export _kb_get, _kbCount
-        .export _vdc_mirror, _mirrorBuf, _lastAttr, _vdc_setglyph
-        .export _vdcRow, _vdcCol, _vdcAttr, _vdcLen, _vdcChar, _vdcBuf
+        .export _scr_mirror, _mirrorBuf, _lastAttr, _scr_setglyph
+        .export _scrRow, _scrCol, _scrAttr, _scrLen, _scrChar, _scrBuf
         ; Link diagnostics: exported so the emulator harness and the on-screen
         ; status panel can see whether bytes are actually arriving.
         .export _rxHead, _rxTail, _rxCount, _nmiCount, _rxOverruns, _rxDropped
@@ -68,12 +68,12 @@ NMI_VECTOR      = $0318
 NMI_EXIT        = $FF33
 
         .bss
-_vdcRow:        .res 1
-_vdcCol:        .res 1
-_vdcAttr:       .res 1
-_vdcLen:        .res 1
-_vdcChar:       .res 1
-_vdcBuf:        .res 256
+_scrRow:        .res 1
+_scrCol:        .res 1
+_scrAttr:       .res 1
+_scrLen:        .res 1
+_scrChar:       .res 1
+_scrBuf:        .res 256
 
 offsetLo:       .res 1
 offsetHi:       .res 1
@@ -93,7 +93,7 @@ _kbCount:       .res 2          ; keys read from the keyboard, for diagnostics
 ; so a host debugging over the network is blind to the 80-column display. The
 ; C128 itself can read it, so it copies a plane here on request and the host
 ; reads it back out of ordinary memory.
-_lastAttr:      .res 1          ; last attribute byte vdc_run wrote
+_lastAttr:      .res 1          ; last attribute byte scr_run wrote
 _mirrorBuf:     .res 2048
 
 rxHead          = _rxHead
@@ -107,9 +107,9 @@ rxBuf:          .res 256
         .code
 
 ; ---------------------------------------------------------------------------
-; vdc_reg_write: A = value, X = register number
+; scr_reg_write: A = value, X = register number
 ; ---------------------------------------------------------------------------
-vdcRegWrite:
+scrRegWrite:
         stx VDC_ADDR
 @wait:  bit VDC_ADDR
         bpl @wait
@@ -117,18 +117,18 @@ vdcRegWrite:
         rts
 
 ; ---------------------------------------------------------------------------
-; vdcSetAddr: point the VDC update address at offsetHi/offsetLo
+; scrSetAddr: point the VDC update address at offsetHi/offsetLo
 ; ---------------------------------------------------------------------------
-vdcSetAddr:
+scrSetAddr:
         lda offsetHi
         ldx #VDC_R_HSTART
-        jsr vdcRegWrite
+        jsr scrRegWrite
         lda offsetLo
         ldx #VDC_R_LSTART
-        jsr vdcRegWrite
+        jsr scrRegWrite
         ldx #VDC_R_DATA         ; leave the data port selected
         stx VDC_ADDR
-        ; vdcRegWrite waits *before* each store, so on return the write to the
+        ; scrRegWrite waits *before* each store, so on return the write to the
         ; address-low register may still be in flight. Without this wait the
         ; very first data write can be issued against the previous update
         ; address, which lost cell 0 of every full-screen clear.
@@ -138,9 +138,9 @@ vdcSetAddr:
         rts
 
 ; ---------------------------------------------------------------------------
-; vdcPut: A = byte -> data port (address auto-increments)
+; scrPut: A = byte -> data port (address auto-increments)
 ; ---------------------------------------------------------------------------
-vdcPut:
+scrPut:
 @wait:  bit VDC_ADDR
         bpl @wait
         sta VDC_DATA
@@ -167,9 +167,9 @@ attrToVdc:
         rts
 
 ; ---------------------------------------------------------------------------
-; vdcRegRead: X = register number -> A
+; scrRegRead: X = register number -> A
 ; ---------------------------------------------------------------------------
-vdcRegRead:
+scrRegRead:
         stx VDC_ADDR
 @wait:  bit VDC_ADDR
         bpl @wait
@@ -239,13 +239,13 @@ fillSpan:
 @done:  rts
 
 ; ---------------------------------------------------------------------------
-; calcOffset: offset = vdcRow * 80 + vdcCol, into offsetHi/offsetLo
+; calcOffset: offset = scrRow * 80 + scrCol, into offsetHi/offsetLo
 ; row*80 == row*64 + row*16, which is cheaper than a multiply loop.
 ; ---------------------------------------------------------------------------
 calcOffset:
         lda #0
         sta offsetHi
-        lda _vdcRow
+        lda _scrRow
         asl a                   ; row*2
         asl a                   ; row*4
         rol offsetHi
@@ -272,7 +272,7 @@ calcOffset:
         sta offsetHi
         lda offsetLo
         clc
-        adc _vdcCol
+        adc _scrCol
         sta offsetLo
         lda offsetHi
         adc #0
@@ -280,20 +280,20 @@ calcOffset:
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_run: write vdcLen screen codes from vdcBuf at (vdcRow,vdcCol),
-;           then the same span in attribute RAM with vdcAttr.
+; _scr_run: write scrLen screen codes from scrBuf at (scrRow,scrCol),
+;           then the same span in attribute RAM with scrAttr.
 ; ---------------------------------------------------------------------------
-_vdc_run:
-        lda _vdcLen
+_scr_run:
+        lda _scrLen
         bne @go
         rts
 @go:    jsr calcOffset
-        jsr vdcSetAddr
+        jsr scrSetAddr
         ldy #0
-@chars: lda _vdcBuf,y
-        jsr vdcPut
+@chars: lda _scrBuf,y
+        jsr scrPut
         iny
-        cpy _vdcLen
+        cpy _scrLen
         bne @chars
 
         jsr calcOffset          ; same span in attribute RAM
@@ -301,29 +301,29 @@ _vdc_run:
         clc
         adc #>ATTR_BASE
         sta offsetHi
-        jsr vdcSetAddr
-        lda _vdcAttr
+        jsr scrSetAddr
+        lda _scrAttr
         jsr attrToVdc
         sta _lastAttr           ; the VDC-format byte we actually store
         ldy #0
 @attrs: lda _lastAttr
-        jsr vdcPut
+        jsr scrPut
         iny
-        cpy _vdcLen
+        cpy _scrLen
         bne @attrs
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_fill: vdcLen copies of vdcChar at (vdcRow,vdcCol) with vdcAttr
+; _scr_fill: scrLen copies of scrChar at (scrRow,scrCol) with scrAttr
 ; ---------------------------------------------------------------------------
-_vdc_fill:
-        lda _vdcLen
+_scr_fill:
+        lda _scrLen
         bne @go
         rts
 @go:    jsr calcOffset
-        jsr vdcSetAddr
-        ldx _vdcLen
-        lda _vdcChar
+        jsr scrSetAddr
+        ldx _scrLen
+        lda _scrChar
         jsr fillChunk
 
         jsr calcOffset
@@ -331,22 +331,22 @@ _vdc_fill:
         clc
         adc #>ATTR_BASE
         sta offsetHi
-        jsr vdcSetAddr
-        ldx _vdcLen
-        lda _vdcAttr
+        jsr scrSetAddr
+        ldx _scrLen
+        lda _scrAttr
         jsr attrToVdc
         jsr fillChunk
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_clear: blank all 2000 cells and set all 2000 attributes, using the
+; _scr_clear: blank all 2000 cells and set all 2000 attributes, using the
 ; VDC block fill rather than a per-cell loop.
 ; ---------------------------------------------------------------------------
-_vdc_clear:
+_scr_clear:
         lda #0
         sta offsetLo
         sta offsetHi
-        jsr vdcSetAddr
+        jsr scrSetAddr
         lda #<2000
         sta fillLeft
         lda #>2000
@@ -358,41 +358,41 @@ _vdc_clear:
         sta offsetLo
         lda #>ATTR_BASE
         sta offsetHi
-        jsr vdcSetAddr
+        jsr scrSetAddr
         lda #<2000
         sta fillLeft
         lda #>2000
         sta fillLeft+1
-        lda _vdcAttr
+        lda _scrAttr
         jsr attrToVdc
         jsr fillSpan
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_place_cursor: VDC registers 14/15 hold the cursor position
+; _scr_place_cursor: VDC registers 14/15 hold the cursor position
 ; ---------------------------------------------------------------------------
-_vdc_place_cursor:
+_scr_place_cursor:
         jsr calcOffset
         lda offsetHi
         ldx #14
-        jsr vdcRegWrite
+        jsr scrRegWrite
         lda offsetLo
         ldx #15
-        jsr vdcRegWrite
+        jsr scrRegWrite
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_init: leave the KERNAL's 80-column setup in place and just clear.
+; _scr_init: leave the KERNAL's 80-column setup in place and just clear.
 ; ---------------------------------------------------------------------------
-_vdc_init:
+_scr_init:
         ; Register 24 bit 7 chooses block COPY (1) or block FILL (0). The
         ; KERNAL may leave either set, and every fill below depends on it.
         ldx #VDC_R_VSCROLL
-        jsr vdcRegRead
+        jsr scrRegRead
         and #$7F
         ldx #VDC_R_VSCROLL
-        jsr vdcRegWrite
-        jsr _vdc_clear
+        jsr scrRegWrite
+        jsr _scr_clear
         rts
 
 ; ---------------------------------------------------------------------------
@@ -535,31 +535,31 @@ _kb_get:
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_mirror: copy one VDC plane into _mirrorBuf.
-;   _vdcChar = 0 -> character cells at VDC $0000
-;   _vdcChar = 1 -> attribute cells at VDC $0800
+; _scr_mirror: copy one VDC plane into _mirrorBuf.
+;   _scrChar = 0 -> character cells at VDC $0000
+;   _scrChar = 1 -> attribute cells at VDC $0800
 ; Copies 2048 bytes, which covers the 2000 used by an 80x25 screen.
 ; ---------------------------------------------------------------------------
         .importzp ptr1
 
-; _vdcChar = 2 additionally means "dump VDC registers 0..36 into mirrorBuf",
+; _scrChar = 2 additionally means "dump VDC registers 0..36 into mirrorBuf",
 ; which is the only way for a host on the far side of the cartridge bus to see
 ; how the VDC is actually configured (where the screen and attribute RAM live,
 ; and whether attributes are enabled at all).
-_vdc_mirror:
+_scr_mirror:
         lda #<_mirrorBuf
         sta ptr1
         lda #>_mirrorBuf
         sta ptr1+1
-        lda _vdcChar
+        lda _scrChar
         cmp #3
         bne @notaddr
         ; Mode 3: copy 2048 bytes from the arbitrary VDC address in
-        ; _vdcRow (high) / _vdcCol (low). Lets the host read back character
+        ; _scrRow (high) / _scrCol (low). Lets the host read back character
         ; definitions, which live in VDC RAM and are otherwise invisible.
-        lda _vdcRow
+        lda _scrRow
         sta offsetHi
-        lda _vdcCol
+        lda _scrCol
         sta offsetLo
         jmp @copy
 @notaddr:
@@ -568,7 +568,7 @@ _vdc_mirror:
         ldx #0
 @reg:   txa
         pha
-        jsr vdcRegRead          ; X = register number -> A
+        jsr scrRegRead          ; X = register number -> A
         sta _mirrorBuf,x
         pla
         tax
@@ -579,21 +579,21 @@ _vdc_mirror:
 @plane:
         lda #0
         sta offsetLo
-        ldx _vdcChar
+        ldx _scrChar
         beq @chars
         lda #>ATTR_BASE
         .byte $2C                       ; skip the next two bytes (BIT abs)
 @chars: lda #>SCREEN_BASE
         sta offsetHi
 @copy:
-        jsr vdcSetAddr                  ; leaves the data port selected
+        jsr scrSetAddr                  ; leaves the data port selected
         ; The VDC data port is pipelined: the first read after setting the
         ; update address returns the previously latched byte, not the one at
         ; the new address. Throw it away, then re-point and read for real.
 @pre:   bit VDC_ADDR
         bpl @pre
         lda VDC_DATA
-        jsr vdcSetAddr
+        jsr scrSetAddr
         ldx #8                          ; 8 pages = 2048 bytes
 @page:  ldy #0
 @byte:  bit VDC_ADDR
@@ -608,8 +608,8 @@ _vdc_mirror:
         rts
 
 ; ---------------------------------------------------------------------------
-; _vdc_setglyph: redefine one character in the lowercase bank.
-;   _vdcChar = character code, _vdcBuf[0..7] = the 8 pixel rows.
+; _scr_setglyph: redefine one character in the lowercase bank.
+;   _scrChar = character code, _scrBuf[0..7] = the 8 pixel rows.
 ;
 ; The VDC holds its character definitions in its own RAM at the base named by
 ; R28 bits 7-5, 16 bytes per definition. The first 256 are the uppercase and
@@ -617,9 +617,9 @@ _vdc_mirror:
 ; is base + $1000 + code*16. Rows 8-15 are outside an 8-pixel character box and
 ; are cleared so a previous definition cannot bleed through.
 ; ---------------------------------------------------------------------------
-_vdc_setglyph:
+_scr_setglyph:
         ldx #VDC_R_CHARBASE
-        jsr vdcRegRead
+        jsr scrRegRead
         ; The base is (bits 7-5) << 13, so its high byte is exactly those bits
         ; left in place: (R28 & $E0) >> 5 << 5.
         and #$E0
@@ -629,13 +629,13 @@ _vdc_setglyph:
 
         ; offset = base + code*16, computed as a separate 16-bit product so the
         ; base is not shifted along with the code.
-        lda _vdcChar
+        lda _scrChar
         asl a
         asl a
         asl a
         asl a
         sta offsetLo            ; low byte  = (code << 4) & $F0
-        lda _vdcChar
+        lda _scrChar
         lsr a
         lsr a
         lsr a
@@ -644,15 +644,15 @@ _vdc_setglyph:
         adc offsetHi
         sta offsetHi
 
-        jsr vdcSetAddr
+        jsr scrSetAddr
         ldy #0
-@rows:  lda _vdcBuf,y
-        jsr vdcPut
+@rows:  lda _scrBuf,y
+        jsr scrPut
         iny
         cpy #8
         bne @rows
         lda #0                  ; clear the unused rows 8-15
-@blank: jsr vdcPut
+@blank: jsr scrPut
         lda #0
         iny
         cpy #16

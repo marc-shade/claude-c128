@@ -37,7 +37,15 @@ import petscii                      # noqa: E402
 import protocol                     # noqa: E402
 from vtscreen import VTScreen       # noqa: E402
 
+# The C128 renders on the 80-column VDC; the C64 has only the VIC-II's 40-column
+# screen. Claude Code lays itself out to whatever width the PTY reports, so the
+# machine choice propagates from here into the terminal, the differ and the
+# child process alike.
 COLS, ROWS = 80, 25
+MACHINES = {
+    "c128": {"cols": 80, "rows": 25, "panel": True},
+    "c64":  {"cols": 40, "rows": 25, "panel": False},
+}
 
 log = logging.getLogger("claude-c128")
 
@@ -249,11 +257,14 @@ def panel_lines(title, busy, tick, uptime, frames, kbytes, drops):
 
 
 class Bridge:
-    def __init__(self, link, argv, cwd=None, panel=True, verbose=False):
+    def __init__(self, link, argv, cwd=None, panel=True, verbose=False,
+                 cols=COLS, rows=ROWS):
         self.link = link
-        self.vt = VTScreen(COLS, ROWS)
-        self.differ = protocol.ScreenDiffer(COLS, ROWS)
-        self.proc = PtyProcess(argv, COLS, ROWS, cwd)
+        self.cols = cols
+        self.rows = rows
+        self.vt = VTScreen(cols, rows)
+        self.differ = protocol.ScreenDiffer(cols, rows)
+        self.proc = PtyProcess(argv, cols, rows, cwd)
         self.panel_enabled = panel
         self.verbose = verbose
         self.last_frame = 0.0
@@ -319,7 +330,7 @@ class Bridge:
             if not self.client_ready:
                 self.client_ready = True
                 enc = protocol.Encoder()
-                enc.hello(COLS, ROWS)
+                enc.hello(self.cols, self.rows)
                 # Redefine the VDC characters Claude Code needs and PETSCII
                 # lacks, before anything is drawn with them.
                 for code, bitmap in font.definitions():
@@ -503,6 +514,10 @@ def main():
     p.add_argument("--command", default="claude",
                    help="what to run in the PTY (default: claude)")
     p.add_argument("--cwd", help="working directory for the child")
+    p.add_argument("--machine", choices=sorted(MACHINES), default="c128",
+                   help="target machine: c128 uses the 80-column VDC and the "
+                        "40-column screen as a status panel; c64 uses the "
+                        "40-column screen as the terminal and has no panel")
     p.add_argument("--no-panel", action="store_true",
                    help="do not drive the 40-column companion screen")
     p.add_argument("--rate", type=int, default=3840,
@@ -517,8 +532,12 @@ def main():
     setup_logging(args.log_file,
                   "DEBUG" if args.verbose else args.log_level)
     sock = open_transport(args)
+    machine = MACHINES[args.machine]
     bridge = Bridge(SerialLink(sock, byte_rate=args.rate), shlex.split(args.command),
-                    cwd=args.cwd, panel=not args.no_panel, verbose=args.verbose)
+                    cwd=args.cwd,
+                    panel=machine["panel"] and not args.no_panel,
+                    verbose=args.verbose,
+                    cols=machine["cols"], rows=machine["rows"])
     # 0 for claude exiting on its own (nothing left to serve, do not respawn);
     # 1 for a link failure, so a supervisor like systemd knows to restart and
     # let the C128 dial back in.
