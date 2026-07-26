@@ -135,19 +135,92 @@ and a call counter — which is what the current pool does — makes values diff
 between runs but nowhere near unpredictable: a few bits per sample, and an
 attacker who knows roughly when the call was placed can bound most of it.
 
-Ways to fix it properly, in order of preference:
+### What the clock situation actually is
+
+Worth stating precisely, because the first version of this document was vague
+about it and the code was wrong about it. From `fpga/io/itu/vhdl_source/itu.vhd`:
+
+- `ms_timer` increments on `tick_1ms` and runs freely. This is the **only**
+  free-running clock software can read: 1 ms resolution.
+- `ITU_TIMER` is finer — `tick_1us` with `c_timer_div = 5`, so 5 µs per tick —
+  but line 102 only decrements it when non-zero, so it is a reloadable one-shot
+  that **halts at zero**, and other code already reloads it for delays. It reads
+  0 most of the time and cannot serve as a sampling clock.
+
+### The accumulator that is there now
+
+`StirEntropy()` samples inter-arrival times, at 1 ms resolution, of events this
+board does not schedule: characters typed on the C128 (`modem.cc`, the ACIA TX
+buffer path) and packets arriving from the network (the relay's `recv`). Samples
+go into a 64-entry ring; `mbedtls_hardware_poll()` absorbs the ring with SHA-256
+and squeezes output from it. SHA-256 is already linked for the handshake, so this
+costs no extra flash.
+
+It is **metered and fails closed**: each sample credits a deliberately
+pessimistic 2 bits, a delta identical to the previous one credits nothing (that
+is what a machine-paced or idle source looks like), and a draw that would exceed
+the collected budget returns `MBEDTLS_ERR_ENTROPY_SOURCE_FAILED` rather than
+stretching what it has. Drawing debits the budget, so a second seeding cannot
+reuse the same entropy.
+
+Three defects in the first attempt are recorded here because none of them
+announced itself, and any one would have produced a "working" TLS stack with
+predictable keys:
+
+- it mixed in `(uint32_t)ITU_TIMER` — an **address** macro, not a register read,
+  so the timer's contribution was a compile-time constant
+- `StirEntropy()` was never called from any event path, only from inside the
+  poll callback, so nothing ever accumulated over time
+- there was no entropy accounting at all, so there was nothing to fail on
+
+### It is still not sufficient
+
+`MODEM_TLS_ENTROPY_REVIEWED` stays undefined. 1 ms resolution over human
+keystrokes is a few bits per event at best; an attacker who knows roughly when
+the call was placed can bound much of it. Most importantly **the 2-bits-per-sample
+credit is an assumption that has never been measured on this hardware** — the
+accounting is only as good as that number.
+
+Ways to finish it, in order of preference:
 
 1. **Ring-oscillator TRNG in the FPGA design.** Needs Quartus and a bitstream
-   rebuild. The only genuinely defensible option.
-2. **Interrupt-arrival jitter** accumulated against a high-resolution counter
-   over several seconds, with a measured entropy estimate. This design has no
-   such counter, so it needs option 1's tooling anyway.
+   rebuild. The only option that is defensible without an entropy measurement
+   campaign.
+2. **Keep this accumulator but justify the credit** — sample against a
+   free-running high-resolution counter and measure the distribution on real
+   hardware. Adding such a counter needs Quartus too.
 3. **Seed once from a trusted source, persist a counter in flash.** Survives
    reboots, but a flash image copied between devices repeats its keystream.
 
 Do not define the macro to make it work.
 
-Note that the refusing build is still ~228 KB larger than baseline, because
+### Testing the accounting
+
+The accounting is the security-bearing part, and it is testable off-hardware.
+`software/io/acia/hosttest/run.sh` compiles the **real** `modem_tls.cc` for the
+host against a fake millisecond clock — not a copy of the logic — and drives
+arrival patterns deliberately: 15 checks covering refusal when empty, no credit
+for evenly-spaced or zero-delta events, accumulation to threshold, exact
+debiting, and refusal of oversized requests. Stubs for the TLS calls `abort()`
+rather than returning plausible values, so a test that strays into the handshake
+path fails loudly instead of quietly passing.
+
+It was mutation-tested, which is the only reason to believe it. Four deliberate
+breakages: crediting every sample, removing the fail-closed gate, dropping the
+budget debit, and ignoring the ring contents. The first three were caught
+immediately. **The fourth was not** — with the ring ignored, successive draws
+still differed, because the event counter alone was feeding the hash. A draw
+that is a pure function of how many events have occurred is predictable, so this
+mattered. The fix was a check that compares two draws with the *same* event
+count and different timings, in separate processes so the counter matches; it
+now catches that mutation.
+
+Two of those mutations are also a reminder that a mutation can be a no-op:
+the first attempt at disabling the fail-closed gate inserted `false &&` into a
+condition joined by `||`, and precedence left the second clause still guarding
+it. The test passing there said nothing until the mutation was corrected.
+
+Note that the refusing build is still ~229 KB larger than baseline, because
 `ModemTls::Read`/`Write` reference `mbedtls_ssl_read`/`write` unconditionally
 and keep the stack linked. If the cartridge were ever shipped without a
 solution to entropy, those should be compiled out too so the flash is not spent
