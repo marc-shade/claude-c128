@@ -175,9 +175,19 @@ frames sent, bytes on the wire, and the count of any dropped bytes.
 ### On a C64
 
 ```sh
-make -C client disk64                    # build the C64 client and a disk
-python3 server/bridge.py --machine c64 --connect $CBM_ULTIMATE_HOST:3000
+./run64.sh                               # build, load, and dial
 ```
+
+On a real C64, load and run `client/build/claude64.prg` however you like, then
+`python3 server/bridge.py --machine c64 --connect $HOST:3000`.
+
+On a **C128 in C64 mode** it is less obvious, which is what `run64.sh` handles.
+The Ultimate's `run_prg` resets the machine, and a C128 resets into *C128* mode;
+it then accepts a C64 `.prg`, reports no error, and leaves you at a BASIC 7.0
+prompt. So the mode switch has to go through the keyboard first — `GO64`,
+confirm, `LOAD`, `RUN` — which is `tools/go64.py`. `run64.sh` also stops the
+`claude-c128` service while it runs, because that service's bootstrap re-mounts
+the C128 boot disk and resets the machine whenever it cannot see a client.
 
 `--machine c64` is not cosmetic: it sets the PTY to 40 columns, so Claude Code
 lays *itself* out for the narrower screen rather than having 80 columns cropped.
@@ -267,9 +277,11 @@ Known limitations:
   written; whether it is audible has not been confirmed.
 - **The C64 has no underline or blink**, and 40 columns truncates long lines.
   See the C64 notes above.
-- **The C64 client is emulator-verified, not hardware-verified.** It renders
-  Claude Code correctly in VICE with zero dropped bytes; nobody has yet run it
-  on a physical C64 or on a C128 in C64 mode.
+- **The C64 client has run on a C128 in C64 mode, not on a physical C64.**
+  Claude Code renders correctly on the real machine — welcome box, logo, prompt,
+  statusline, and the logo in orange — but C64 mode on a C128 is not quite a C64
+  (same VIC-II and 6510-compatible CPU, different board), so a real C64 is still
+  untested.
 
 ## Documentation
 
