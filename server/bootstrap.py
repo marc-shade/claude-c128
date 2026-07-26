@@ -40,6 +40,19 @@ ACIA_VALUE = "DE00%2FNMI"
 # a=$01 u=$15 d=$04 e=$05.
 MARKER = bytes((0x03, 0x0C, 0x01, 0x15, 0x04, 0x05))    # "claude"
 
+# The client prints its splash before it configures the ACIA, and the Ultimate's
+# modem layer only starts once the ACIA is configured. Returning on the splash
+# alone therefore lets the bridge dial before there is anything to answer, which
+# costs a failed connection and a restart cycle. These are the values the client
+# writes, so seeing them means the link is genuinely ready.
+#
+# Only the command and control registers are read. Reading $DE00 pops a byte off
+# the 6551's receive register and reading $DE01 clears its interrupt flag, so
+# either would steal data from a running session; $DE02 and $DE03 are plain
+# registers with no read side effects.
+ACIA_CMD_ADDR, ACIA_CMD_VALUE = 0xDE02, 0x09
+ACIA_CTRL_ADDR, ACIA_CTRL_VALUE = 0xDE03, 0x1F
+
 
 def req(host, method, path, data=None, timeout=25):
     r = urllib.request.Request(f"http://{host}{path}", data=data, method=method)
@@ -59,6 +72,17 @@ def client_running(host):
     return MARKER in mem
 
 
+def link_ready(host):
+    """True when the client has configured the ACIA, so the modem will answer."""
+    try:
+        _, regs = req(host, "GET",
+                      f"/v1/machine:readmem?address={ACIA_CMD_ADDR:04X}&length=2")
+    except (urllib.error.URLError, OSError):
+        return False
+    return (len(regs) >= 2
+            and regs[0] == ACIA_CMD_VALUE and regs[1] == ACIA_CTRL_VALUE)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default=HOST)
@@ -73,7 +97,7 @@ def main():
 
     host = args.host
 
-    if not args.force and client_running(host):
+    if not args.force and client_running(host) and link_ready(host):
         print("[bootstrap] client already running, leaving the machine alone")
         return 0
 
@@ -95,14 +119,22 @@ def main():
         return 1
 
     deadline = time.time() + args.wait
+    seen_client = False
     while time.time() < deadline:
-        if client_running(host):
-            print("[bootstrap] client is up")
+        if not seen_client and client_running(host):
+            seen_client = True
+            print("[bootstrap] client is up, waiting for it to open the ACIA")
+        if seen_client and link_ready(host):
+            print("[bootstrap] link is ready")
             return 0
         time.sleep(2)
 
-    print(f"[bootstrap] client did not appear within {args.wait:g}s "
-          f"(is the C128 powered on?)", file=sys.stderr)
+    if seen_client:
+        print(f"[bootstrap] client started but never configured the ACIA within "
+              f"{args.wait:g}s (is ACIA mode set to DE00/NMI?)", file=sys.stderr)
+    else:
+        print(f"[bootstrap] client did not appear within {args.wait:g}s "
+              f"(is the C128 powered on?)", file=sys.stderr)
     return 1
 
 

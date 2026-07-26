@@ -429,13 +429,10 @@ class Bridge:
                         # Emulation Layer...", "CONNECT 38400"), not keystrokes.
                         if self.client_ready and typed:
                             out = keymap.translate(typed)
-                            if self.verbose:
-                                print(f"[bridge] keys from C128: {typed!r} "
-                                      f"-> pty {out!r}", file=sys.stderr, flush=True)
+                            log.debug("keys from C128: %r -> pty %r", typed, out)
                             self.proc.write(out)
-                        elif typed and self.verbose:
-                            print(f"[bridge] dropped pre-handshake bytes: {typed!r}",
-                                  file=sys.stderr, flush=True)
+                        elif typed:
+                            log.debug("dropped pre-handshake bytes: %r", typed)
 
                 now = time.time()
                 if now - self.last_unmapped >= UNMAPPED_INTERVAL:
@@ -487,11 +484,11 @@ def open_transport(args):
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", args.listen))
     listener.listen(1)
-    print(f"[bridge] listening on 127.0.0.1:{args.listen}", file=sys.stderr)
+    log.info("listening on 127.0.0.1:%d", args.listen)
     sock, peer = listener.accept()
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     listener.close()
-    print(f"[bridge] client connected from {peer}", file=sys.stderr)
+    log.info("client connected from %s", peer)
     return sock
 
 

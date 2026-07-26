@@ -252,9 +252,13 @@ and either of which would have hung the machine on every power-on:
   was one byte short of the loop start and would have branched into the middle
   of an instruction. `mkbootdisk.py` derives it and range-checks it.
 
-**The Ultimate has no "mount an image at startup" setting** — every config
-category was checked. So a cold power-on leaves drive A empty and nothing
-autoboots, and the always-on Linux side has to do the bring-up:
+**A cold power-on does not autoboot, but not for the reason it first appeared.**
+The Ultimate *does* keep drive A mounted across a power cycle once the image
+lives on its own storage — verified by pulling the plug: `image_file` was still
+`/Usb0/claude-boot.d64` afterwards. The C128 still comes up at a BASIC prompt,
+because it reads the boot sector before the Ultimate's drive emulation is ready,
+and there is no second attempt. A reset once the Ultimate is up does boot it,
+which is what the bring-up does:
 `server/bootstrap.py` mounts the boot disk and resets. It decides whether a
 client is already running by looking for the client's name on the 40-column
 screen at `$0400`, **not** by reading the ACIA — probing `$DE00-$DE03` would
