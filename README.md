@@ -1,3 +1,5 @@
+<img width="1672" height="941" alt="ChatGPT Image Jul 26, 2026, 09_04_09 AM" src="https://github.com/user-attachments/assets/051248e7-a443-42b1-bb81-5e6c2d6ac841" />
+
 # claude-c128
 
 **Claude Code, running on a real Commodore 128.**
