@@ -20,6 +20,7 @@ CMD_BELL = 0x06
 CMD_PANEL = 0x07     # row, len, <len screen codes>  -> 40-col VIC-II panel
 CMD_HELLO = 0x08     # cols, rows
 CMD_BYE = 0x09
+CMD_GLYPH = 0x0A     # code, 8 bitmap bytes -> redefine a VDC character
 
 ATTR_UNDERLINE = 0x20
 ATTR_REVERSE = 0x40
@@ -84,6 +85,9 @@ class Encoder:
 
     def bell(self):
         self.buf += bytes((CMD_BELL,))
+
+    def glyph(self, code, bitmap):
+        self.buf += bytes((CMD_GLYPH, code)) + bytes(bitmap)
 
     def hello(self, cols, rows):
         self.buf += bytes((CMD_HELLO, cols, rows))
@@ -219,6 +223,8 @@ def decode(data, sink):
             row, ln = data[i], data[i + 1]
             i += 2
             sink.panel(row, data[i:i + ln]); i += ln
+        elif cmd == CMD_GLYPH:
+            i += 9
         elif cmd == CMD_HELLO:
             i += 2
         elif cmd == CMD_BYE:

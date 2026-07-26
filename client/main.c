@@ -23,6 +23,7 @@ void vdc_run(void);
 void vdc_fill(void);
 void vdc_clear(void);
 void vdc_place_cursor(void);
+void vdc_setglyph(void);
 
 void acia_init(void);
 void acia_shutdown(void);
@@ -43,6 +44,7 @@ extern unsigned char mirrorBuf[2048];
 #define CMD_PANEL   0x07
 #define CMD_HELLO   0x08
 #define CMD_BYE     0x09
+#define CMD_GLYPH   0x0A
 
 #define CURSOR_HIDE 0xFF
 
@@ -51,7 +53,8 @@ enum {
     S_OPCODE,
     S_ARGS,
     S_PAYLOAD,
-    S_PANEL_PAYLOAD
+    S_PANEL_PAYLOAD,
+    S_GLYPH_PAYLOAD
 };
 
 static unsigned char state = S_OPCODE;
@@ -153,6 +156,7 @@ static void handle_byte(unsigned char b)
         case CMD_CURSOR: argsNeeded = 2; break;
         case CMD_PANEL:  argsNeeded = 2; break;
         case CMD_HELLO:  argsNeeded = 2; break;
+        case CMD_GLYPH:  argsNeeded = 1; break;
         case CMD_FRAME:  framesSeen = 1; return;
         case CMD_BELL:   bell(); return;
         case CMD_BYE:    running = 0; return;
@@ -214,6 +218,13 @@ static void handle_byte(unsigned char b)
             state = S_OPCODE;
             return;
 
+        case CMD_GLYPH:
+            /* args[0] is the character code; the 8 bitmap rows follow. */
+            vdcChar = args[0];
+            payloadNeeded = 8;
+            state = S_GLYPH_PAYLOAD;
+            return;
+
         case CMD_PANEL:
             panelRow = args[0];
             payloadNeeded = args[1];
@@ -245,6 +256,15 @@ static void handle_byte(unsigned char b)
         ++payloadGot;
         if (payloadGot >= payloadNeeded)
             state = S_OPCODE;
+        return;
+
+    case S_GLYPH_PAYLOAD:
+        vdcBuf[payloadGot] = b;
+        ++payloadGot;
+        if (payloadGot >= 8) {
+            vdc_setglyph();
+            state = S_OPCODE;
+        }
         return;
     }
 }

@@ -114,14 +114,7 @@ class Mon:
             pass
 
 
-INVERSE = {}
-for _ch, _code in petscii.GLYPHS.items():
-    INVERSE.setdefault(_code, _ch)
-for _c in range(0x20, 0x40):
-    INVERSE.setdefault(_c, chr(_c))
-for _i in range(26):
-    INVERSE.setdefault(0x01 + _i, chr(ord("a") + _i))
-    INVERSE.setdefault(0x41 + _i, chr(ord("A") + _i))
+INVERSE = petscii.inverse_map()
 
 
 def render(mem, cols=80, rows=25):

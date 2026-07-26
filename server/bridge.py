@@ -30,6 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import keymap                       # noqa: E402
+import font                         # noqa: E402
 import petscii                      # noqa: E402
 import protocol                     # noqa: E402
 from vtscreen import VTScreen       # noqa: E402
@@ -252,6 +253,10 @@ class Bridge:
                 self.client_ready = True
                 enc = protocol.Encoder()
                 enc.hello(COLS, ROWS)
+                # Redefine the VDC characters Claude Code needs and PETSCII
+                # lacks, before anything is drawn with them.
+                for code, bitmap in font.definitions():
+                    enc.glyph(code, bitmap)
                 self.link.queue(enc.take())
                 if self.verbose:
                     print("[bridge] client is listening", file=sys.stderr)

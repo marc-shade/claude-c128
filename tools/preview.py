@@ -16,20 +16,8 @@ import petscii            # noqa: E402
 import protocol           # noqa: E402
 from vtscreen import VTScreen   # noqa: E402
 
-# Inverse of the glyph table, so the preview shows the shape the C128 shows.
-INVERSE = {}
-for _ch, _code in petscii.GLYPHS.items():
-    INVERSE.setdefault(_code, _ch)
-for _c in range(0x20, 0x40):
-    INVERSE.setdefault(_c, chr(_c))
-for _i in range(26):
-    INVERSE.setdefault(0x01 + _i, chr(ord("a") + _i))
-    INVERSE.setdefault(0x41 + _i, chr(ord("A") + _i))
-INVERSE.setdefault(0x00, "@")
-INVERSE.setdefault(0x1B, "[")
-INVERSE.setdefault(0x1D, "]")
-INVERSE.setdefault(0x4D, "\\")
-INVERSE.setdefault(0x66, "░")
+# One shared inverse map, so the preview shows exactly what the C128 shows.
+INVERSE = petscii.inverse_map()
 
 
 def code_to_char(code):

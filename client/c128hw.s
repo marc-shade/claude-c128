@@ -19,7 +19,7 @@
         .export _vdc_init, _vdc_run, _vdc_fill, _vdc_clear, _vdc_place_cursor
         .export _acia_init, _acia_get, _acia_avail, _acia_put, _acia_shutdown
         .export _kb_get, _kbCount
-        .export _vdc_mirror, _mirrorBuf, _lastAttr
+        .export _vdc_mirror, _mirrorBuf, _lastAttr, _vdc_setglyph
         .export _vdcRow, _vdcCol, _vdcAttr, _vdcLen, _vdcChar, _vdcBuf
         ; Link diagnostics: exported so the emulator harness and the on-screen
         ; status panel can see whether bytes are actually arriving.
@@ -32,6 +32,7 @@ VDC_R_HSTART    = 18            ; update address high
 VDC_R_LSTART    = 19            ; update address low
 VDC_R_VSCROLL   = 24            ; bit 7 selects block copy (1) or fill (0)
 VDC_R_COUNT     = 30            ; block word count: triggers the block operation
+VDC_R_CHARBASE  = 28            ; bits 7-5 = character definition base address
 VDC_R_DATA      = 31            ; data port, auto-incrementing
 
 ; Largest block fill issued at once. The count register is 8-bit, and keeping
@@ -592,4 +593,54 @@ _vdc_mirror:
         inc ptr1+1
         dex
         bne @page
+        rts
+
+; ---------------------------------------------------------------------------
+; _vdc_setglyph: redefine one character in the lowercase bank.
+;   _vdcChar = character code, _vdcBuf[0..7] = the 8 pixel rows.
+;
+; The VDC holds its character definitions in its own RAM at the base named by
+; R28 bits 7-5, 16 bytes per definition. The first 256 are the uppercase and
+; graphics set, the second 256 the lowercase set we render into, so the target
+; is base + $1000 + code*16. Rows 8-15 are outside an 8-pixel character box and
+; are cleared so a previous definition cannot bleed through.
+; ---------------------------------------------------------------------------
+_vdc_setglyph:
+        ldx #VDC_R_CHARBASE
+        jsr vdcRegRead
+        ; The base is (bits 7-5) << 13, so its high byte is exactly those bits
+        ; left in place: (R28 & $E0) >> 5 << 5.
+        and #$E0
+        clc
+        adc #$10                ; + $1000 -> the lowercase bank
+        sta offsetHi
+        lda #0
+        sta offsetLo
+
+        ; offset += code * 16
+        lda _vdcChar
+        ldx #4
+@shift: asl a
+        rol offsetHi
+        dex
+        bne @shift
+        clc
+        adc offsetLo
+        sta offsetLo
+        bcc @noc
+        inc offsetHi
+@noc:
+        jsr vdcSetAddr
+        ldy #0
+@rows:  lda _vdcBuf,y
+        jsr vdcPut
+        iny
+        cpy #8
+        bne @rows
+        lda #0                  ; clear the unused rows 8-15
+@blank: jsr vdcPut
+        lda #0
+        iny
+        cpy #16
+        bne @blank
         rts

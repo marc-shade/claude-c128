@@ -10,6 +10,8 @@ is readable. That set keeps the box-drawing and block glyphs at $40, $5B-$5D,
 $6B-$73, $7B-$7F and $A0+, and gives up only codes $41-$5A, which become A-Z.
 """
 
+import font
+
 ROM_PATH = "/usr/share/vice/C128/chargen-390059-01.bin"
 CHARSET2_OFFSET = 0x0800          # lowercase/uppercase set, C128 mode
 
@@ -105,7 +107,15 @@ SPINNER = "|/-\\"
 
 
 def to_screen_code(ch: str) -> int:
-    """Map one character to a C128 screen code in the lowercase charset."""
+    """Map one character to a C128 screen code in the lowercase charset.
+
+    Characters the client has a custom VDC glyph for win over both the PETSCII
+    table and the ASCII stand-ins, so they render exactly rather than being
+    approximated.
+    """
+    code = font.CODES.get(ch)
+    if code is not None:
+        return code
     if ch in GLYPHS:
         return GLYPHS[ch]
 
@@ -173,10 +183,20 @@ VDC_PALETTE = [
 
 BLACK, WHITE, LIGHT_GREY, DARK_GREY = 0, 15, 14, 1
 
+# The colour the Claude Code logo is drawn in. Its real shade is a salmon that
+# nearest-match sends to grey, and neither grey nor the faithful pink reads well
+# on an RGBI monitor, so it is chosen deliberately. Any VDC index works:
+#   0 black  1 dk grey  2 blue   3 lt blue  4 green   5 lt green  6 cyan
+#   7 lt cyan 8 red     9 lt red 10 purple 11 lt purple 12 brown 13 yellow
+#   14 lt grey 15 white
+LOGO_COLOR = 7            # light cyan
+
 # Claude Code's palette, pinned by hand so its identity colors land on the
 # right VDC entries instead of drifting to whatever nearest-RGB picks.
 EXACT = {
-    (0xD7, 0x77, 0x57): 12,   # Claude terracotta (logo)  -> brown/orange
+    (0xD7, 0x87, 0x87): LOGO_COLOR,   # logo, as actually emitted
+    (0xD7, 0x77, 0x57): LOGO_COLOR,   # logo, older shade
+    (0xCC, 0x78, 0x5C): LOGO_COLOR,   # logo, banner variant
     (0xFF, 0xC1, 0x07): 13,   # amber warning             -> yellow
     (0x99, 0x99, 0x99): 14,   # dim text                  -> light grey
     (0x88, 0x88, 0x88): 1,    # rules and borders         -> dark grey
@@ -247,6 +267,30 @@ def apply_intensity(color: int, bold: bool, dim: bool) -> int:
     if dim and not bold:
         return DIM.get(color, color)
     return color
+
+
+def inverse_map():
+    """screen code -> a character to display it as, for host-side viewers.
+
+    Custom VDC glyphs take priority: on the C128 they are the real thing, so a
+    viewer that showed them as '?' would misreport a screen that is correct.
+    """
+    inv = {}
+    for ch, code in font.CODES.items():
+        inv[code] = ch
+    for ch, code in GLYPHS.items():
+        inv.setdefault(code, ch)
+    for c in range(0x20, 0x40):
+        inv.setdefault(c, chr(c))
+    for i in range(26):
+        inv.setdefault(0x01 + i, chr(ord("a") + i))
+        inv.setdefault(0x41 + i, chr(ord("A") + i))
+    inv.setdefault(0x00, "@")
+    inv.setdefault(0x1B, "[")
+    inv.setdefault(0x1D, "]")
+    inv.setdefault(0x4D, "\\")
+    inv.setdefault(0x66, "\u2591")
+    return inv
 
 
 # ---------------------------------------------------------------------------

@@ -211,8 +211,46 @@ def test_osc_hyperlink_payload_never_renders():
           f"hyperlink payload rendered as text: {row!r}")
 
 
+def test_font_slots_are_free():
+    """A custom glyph must never overwrite a character PETSCII already uses."""
+    import font
+
+    clashes = sorted(set(font.CODES.values()) & set(petscii.GLYPHS.values()))
+    check(not clashes,
+          "custom glyphs would overwrite PETSCII characters at "
+          + ", ".join(f"${c:02X}" for c in clashes))
+    # The reserved list must actually cover everything GLYPHS claims up there.
+    high = {c for c in petscii.GLYPHS.values() if c >= 0xA0}
+    missing = sorted(high - font.RESERVED)
+    check(not missing,
+          "font.RESERVED misses PETSCII codes "
+          + ", ".join(f"${c:02X}" for c in missing))
+
+
+def test_custom_glyphs_win_over_substitutes():
+    """Characters with a real glyph must not fall back to an ASCII stand-in."""
+    import font
+
+    for ch in ("❯", "⏺", "✳", "⎿", "…", "·", "←", "╭", "╮", "╰", "╯"):
+        code = petscii.to_screen_code(ch)
+        check(code == font.CODES[ch],
+              f"{ch!r} rendered as ${code:02X}, expected the custom "
+              f"glyph ${font.CODES[ch]:02X}")
+    # Every bitmap is 8 rows of 8 bits.
+    for code, bmp in font.definitions():
+        check(len(bmp) == 8, f"glyph ${code:02X} has {len(bmp)} rows")
+        check(all(0 <= b <= 255 for b in bmp), f"glyph ${code:02X} out of range")
+
+
 def test_colors_map_to_claude_identity():
-    check(petscii.rgb_to_vdc(0xD7, 0x77, 0x57) == 12, "Claude terracotta mismapped")
+    # The logo shade is chosen, not nearest-matched: its real salmon lands on
+    # grey, which is indistinguishable from body text on an RGBI monitor.
+    check(petscii.rgb_to_vdc(0xD7, 0x87, 0x87) == petscii.LOGO_COLOR,
+          "logo colour not pinned")
+    check(petscii.rgb_to_vdc(0xD7, 0x77, 0x57) == petscii.LOGO_COLOR,
+          "older logo shade not pinned")
+    check(petscii.LOGO_COLOR not in (14, 1, 12, 9, 11),
+          "logo colour must not be grey, orange or pink")
     check(petscii.rgb_to_vdc(0xFF, 0xC1, 0x07) == 13, "amber warning mismapped")
     check(petscii.rgb_to_vdc(0x00, 0x00, 0x00) == 0, "black mismapped")
     check(petscii.rgb_to_vdc(0xFF, 0xFF, 0xFF) == 15, "white mismapped")
