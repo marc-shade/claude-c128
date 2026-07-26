@@ -281,3 +281,31 @@ also exposed the ring-overflow bug that 2MHz had been masking.
 
 **Screen clearing uses the VDC block fill.** Writing 2000 cells individually
 takes ~80ms at 1MHz — long enough for a burst to lap a 256-byte receive ring.
+
+
+## Driving the keyboard from the host
+
+Both machines take injected keystrokes through the KERNAL buffer, which is what
+`tools/go64.py` and the hardware tests use. Two things bite.
+
+**The buffer moves between modes.** The C128 keeps it at `$034A` with the pending
+count at `$D0`; the C64 uses `$0277` and `$C6`. After `GO64` the second pair is
+the live one, and writing to the first does nothing at all.
+
+**Write PETSCII, not ASCII.** PETSCII letters are `$41-$5A`; ASCII lowercase
+`$61-$7A` lands on graphics symbols. Injecting the ASCII bytes for
+`hello from a c64` produced this in the bridge log:
+
+```
+keys from C128: b'hello fr' -> pty b' '
+keys from C128: b'om a c64' -> pty b'  64'
+```
+
+Sixteen keys went in, four characters came out — the digits and spaces, which
+share codes between the two encodings, while every letter folded to something
+unprintable. Sending `HELLO FROM A C64` instead gives `-> pty b'hello fr'`, the
+bridge folding `$41-$5A` to lowercase as it does for a real keypress.
+
+That failure is worth recognising because it looks like a broken client rather
+than a badly formed test: the link is clean, the counters are zero, and *some*
+characters arrive.

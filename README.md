@@ -165,7 +165,7 @@ systemctl --user enable --now claude-c128
 
 ## Using it
 
-Type on the C128. **HELP** forces a full repaint and re-arms the modem, which is
+Type on the Commodore. **HELP** forces a full repaint and re-arms the modem, which is
 how you reconnect after restarting the host side. **RUN/STOP + RESTORE** quits.
 On a C64 the repaint key is **F7**, since it has no HELP key.
 
@@ -278,10 +278,11 @@ Known limitations:
 - **The C64 has no underline or blink**, and 40 columns truncates long lines.
   See the C64 notes above.
 - **The C64 client has run on a C128 in C64 mode, not on a physical C64.**
-  Claude Code renders correctly on the real machine — welcome box, logo, prompt,
-  statusline, and the logo in orange — but C64 mode on a C128 is not quite a C64
-  (same VIC-II and 6510-compatible CPU, different board), so a real C64 is still
-  untested.
+  On the real machine: Claude Code renders, the logo is orange in colour RAM, the
+  keyboard round-trips (`HELLO FROM A C64` → the PTY → back into the input line),
+  and the link carried it with zero overruns and zero dropped bytes. But C64 mode
+  on a C128 is not quite a C64 — same VIC-II and a 6510-compatible CPU, different
+  board — so a real C64 is still untested.
 
 ## Documentation
 
