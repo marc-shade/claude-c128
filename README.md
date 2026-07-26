@@ -88,6 +88,7 @@ python3 tools/vc128.py --connect 127.0.0.1:6400 --interactive
 | `tools/emutest.py` | full stack in VICE, with client diagnostics |
 | `tools/preview.py` | render a captured ANSI stream as the C128 would |
 | `tools/glyphmatch.py` | derives the glyph table from the character ROM |
+| `server/font.py` | custom VDC glyphs, drawn as editable 8x8 art |
 | `tools/vdcpeek.py` | read the real 80-column screen back over the network |
 | `tools/hwrun.py` | bring-up and verification against the real machine |
 
@@ -194,6 +195,15 @@ printed the literal `u` at the cursor — a stray character in the top-left corn
 — and applied `ESC[>4;2m` as plain SGR 4, switching underline on for the whole
 screen. One cause, two symptoms that looked unrelated. `sanitize()` strips them
 and `test_private_prefix_csi_is_stripped` pins the behaviour.
+
+**Redefining a VDC character is address arithmetic that must not be fused.**
+Definitions live in VDC RAM at `R28_base + $1000 + code*16` for the lowercase
+bank. Multiplying the code by 16 *into* the register already holding the base
+shifts the base too, so every glyph lands somewhere arbitrary — in practice in
+the attribute area, corrupting colours and leaving the real glyphs untouched.
+Compute `code*16` separately, then add the base. `tools/vdcpeek.py` can read
+the definitions back out of VDC RAM, which is the only way to check this
+without staring at the monitor.
 
 ## Two traps that cost the most time
 

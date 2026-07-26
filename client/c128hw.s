@@ -547,7 +547,22 @@ _kb_get:
 ; how the VDC is actually configured (where the screen and attribute RAM live,
 ; and whether attributes are enabled at all).
 _vdc_mirror:
+        lda #<_mirrorBuf
+        sta ptr1
+        lda #>_mirrorBuf
+        sta ptr1+1
         lda _vdcChar
+        cmp #3
+        bne @notaddr
+        ; Mode 3: copy 2048 bytes from the arbitrary VDC address in
+        ; _vdcRow (high) / _vdcCol (low). Lets the host read back character
+        ; definitions, which live in VDC RAM and are otherwise invisible.
+        lda _vdcRow
+        sta offsetHi
+        lda _vdcCol
+        sta offsetLo
+        jmp @copy
+@notaddr:
         cmp #2
         bne @plane
         ldx #0
@@ -562,10 +577,6 @@ _vdc_mirror:
         bne @reg
         rts
 @plane:
-        lda #<_mirrorBuf
-        sta ptr1
-        lda #>_mirrorBuf
-        sta ptr1+1
         lda #0
         sta offsetLo
         ldx _vdcChar
@@ -574,6 +585,7 @@ _vdc_mirror:
         .byte $2C                       ; skip the next two bytes (BIT abs)
 @chars: lda #>SCREEN_BASE
         sta offsetHi
+@copy:
         jsr vdcSetAddr                  ; leaves the data port selected
         ; The VDC data port is pipelined: the first read after setting the
         ; update address returns the previously latched byte, not the one at
@@ -613,23 +625,25 @@ _vdc_setglyph:
         and #$E0
         clc
         adc #$10                ; + $1000 -> the lowercase bank
-        sta offsetHi
-        lda #0
-        sta offsetLo
+        sta offsetHi            ; high byte of the lowercase bank base
 
-        ; offset += code * 16
+        ; offset = base + code*16, computed as a separate 16-bit product so the
+        ; base is not shifted along with the code.
         lda _vdcChar
-        ldx #4
-@shift: asl a
-        rol offsetHi
-        dex
-        bne @shift
+        asl a
+        asl a
+        asl a
+        asl a
+        sta offsetLo            ; low byte  = (code << 4) & $F0
+        lda _vdcChar
+        lsr a
+        lsr a
+        lsr a
+        lsr a                   ; high byte = code >> 4
         clc
-        adc offsetLo
-        sta offsetLo
-        bcc @noc
-        inc offsetHi
-@noc:
+        adc offsetHi
+        sta offsetHi
+
         jsr vdcSetAddr
         ldy #0
 @rows:  lda _vdcBuf,y

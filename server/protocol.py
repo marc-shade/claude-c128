@@ -17,7 +17,7 @@ CMD_FILL = 0x03      # row, col, attr, len, char
 CMD_CURSOR = 0x04    # row, col   (0xFF,0xFF hides it)
 CMD_FRAME = 0x05     # end of frame
 CMD_BELL = 0x06
-CMD_PANEL = 0x07     # row, len, <len screen codes>  -> 40-col VIC-II panel
+CMD_PANEL = 0x07     # row, colour, len, <len screen codes> -> VIC-II panel
 CMD_HELLO = 0x08     # cols, rows
 CMD_BYE = 0x09
 CMD_GLYPH = 0x0A     # code, 8 bitmap bytes -> redefine a VDC character
@@ -79,9 +79,9 @@ class Encoder:
     def hide_cursor(self):
         self.buf += bytes((CMD_CURSOR, 0xFF, 0xFF))
 
-    def panel(self, row, codes):
+    def panel(self, row, color, codes):
         codes = codes[:40]
-        self.buf += bytes((CMD_PANEL, row, len(codes))) + bytes(codes)
+        self.buf += bytes((CMD_PANEL, row, color, len(codes))) + bytes(codes)
 
     def bell(self):
         self.buf += bytes((CMD_BELL,))
@@ -220,8 +220,8 @@ def decode(data, sink):
         elif cmd == CMD_BELL:
             sink.bell()
         elif cmd == CMD_PANEL:
-            row, ln = data[i], data[i + 1]
-            i += 2
+            row, color, ln = data[i], data[i + 1], data[i + 2]
+            i += 3
             sink.panel(row, data[i:i + ln]); i += ln
         elif cmd == CMD_GLYPH:
             i += 9

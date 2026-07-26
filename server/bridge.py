@@ -41,6 +41,9 @@ COLS, ROWS = 80, 25
 # far faster than a serial line can carry, and the eye cannot see 30ms anyway.
 FRAME_INTERVAL = 0.05
 
+# How often the companion screen's clock and spinner refresh.
+PANEL_INTERVAL = 1.0
+
 # If this much output is still queued, the link is behind. Drop the backlog and
 # force a full repaint rather than displaying an ever-staler screen.
 BACKLOG_LIMIT = 32768
@@ -189,15 +192,34 @@ class SerialLink:
             pass
 
 
-def panel_lines(title, status):
-    """Content for the 40-column VIC-II companion screen."""
-    out = []
-    out.append(("claude code / c128", 0))
-    out.append(("-" * 40, 1))
-    for i, chunk in enumerate([title[i:i + 40] for i in range(0, len(title), 40)][:2]):
-        out.append((chunk, 3 + i))
-    out.append((status[:40], 6))
-    return out
+# VIC-II colour codes for the companion screen.
+VIC_CYAN, VIC_WHITE, VIC_GREY, VIC_GREEN, VIC_YELLOW, VIC_RED = 3, 1, 15, 13, 7, 10
+
+SPINNER = "|/-\\"
+
+
+def panel_lines(title, busy, tick, uptime, frames, kbytes, drops):
+    """Content for the 40-column companion screen, as (row, colour, text).
+
+    Deliberately shows what the bridge actually knows - the title Claude Code
+    sets, and the state of the link - rather than trying to parse meaning out
+    of the TUI, which would be guesswork that quietly goes stale.
+    """
+    mark = SPINNER[tick % len(SPINNER)] if busy else "."
+    mins, secs = divmod(int(uptime), 60)
+    return [
+        (0, VIC_CYAN,  "claude code".ljust(28) + "c128 term"),
+        (1, VIC_GREY,  "-" * 40),
+        (3, VIC_WHITE, f"{mark} {title}"[:40]),
+        (5, VIC_GREY,  f"session   {mins:d}m{secs:02d}s"),
+        (6, VIC_GREY,  f"frames    {frames}"),
+        (7, VIC_GREY,  f"link      {kbytes:.1f} kb"),
+        (8, VIC_RED if drops else VIC_GREEN,
+                       f"dropped   {drops}" if drops else "dropped   0   clean"),
+        (10, VIC_GREY, "-" * 40),
+        (11, VIC_YELLOW, "HELP repaints / reconnects"),
+        (12, VIC_GREY, "RUN-STOP + RESTORE quits"),
+    ]
 
 
 class Bridge:
@@ -210,7 +232,10 @@ class Bridge:
         self.verbose = verbose
         self.last_frame = 0.0
         self.dirty = False
-        self.last_panel = None
+        self.last_panel = {}
+        self.started = time.time()
+        self.last_activity = 0.0
+        self.last_panel_time = 0.0
         self.bytes_out = 0
         self.frames_sent = 0
         self.pending_escape = False
@@ -263,7 +288,7 @@ class Bridge:
             self.link.reset_credit()
             self.differ.reset()
             self.dirty = True
-            self.last_panel = None
+            self.last_panel = {}
             if self.verbose:
                 print("[bridge] client asked for a resync", file=sys.stderr)
         elif code == protocol.CLIENT_CREDIT:
@@ -288,6 +313,7 @@ class Bridge:
 
         if self.panel_enabled:
             frame += self._panel_frame()
+            self.last_panel_time = time.time()
 
         # A bare FRAME byte means nothing changed; do not spend the link on it.
         if len(frame) > 1:
@@ -299,16 +325,25 @@ class Bridge:
 
     def _panel_frame(self):
         title = self.vt.title() or "claude code"
-        status = f"{self.frames_sent} frames  {self.bytes_out // 1024}k sent"
-        lines = panel_lines(title, status)
-        if lines == self.last_panel:
-            return b""
-        self.last_panel = lines
+        busy = time.time() - self.last_activity < 1.0
+        lines = panel_lines(
+            title, busy, self.frames_sent,
+            time.time() - self.started, self.frames_sent,
+            self.bytes_out / 1024.0,
+            0,
+        )
+        # Only resend rows that changed: the panel shares the link with the
+        # terminal, and a clock ticking every second must not cost 400 bytes.
         enc = protocol.Encoder()
-        for text, row in lines:
-            codes = [petscii.to_screen_code(c) for c in text.ljust(40)[:40]]
-            enc.panel(row, codes)
-        return enc.take()
+        changed = False
+        for row, color, text in lines:
+            text = text.ljust(40)[:40]
+            if self.last_panel.get(row) == (color, text):
+                continue
+            self.last_panel[row] = (color, text)
+            enc.panel(row, color, [petscii.to_screen_code(c) for c in text])
+            changed = True
+        return enc.take() if changed else b""
 
     def run(self):
         try:
@@ -325,7 +360,7 @@ class Bridge:
                 elif self.dirty:
                     timeout = FRAME_INTERVAL
                 else:
-                    timeout = 0.25
+                    timeout = min(0.25, PANEL_INTERVAL)
                 r, w, _ = select.select(rlist, wlist, [], timeout)
 
                 if self.proc.fd in r:
@@ -335,6 +370,7 @@ class Bridge:
                     if data:
                         self.vt.feed(data)
                         self.dirty = True
+                        self.last_activity = time.time()
 
                 if self.link in r:
                     keys = self.link.recv()
@@ -353,9 +389,20 @@ class Bridge:
                             print(f"[bridge] dropped pre-handshake bytes: {typed!r}",
                                   file=sys.stderr, flush=True)
 
+                now = time.time()
                 if (self.client_ready and self.dirty
-                        and time.time() - self.last_frame >= FRAME_INTERVAL):
+                        and now - self.last_frame >= FRAME_INTERVAL):
                     self._send_frame()
+                elif (self.client_ready and self.panel_enabled
+                        and now - self.last_panel_time >= PANEL_INTERVAL):
+                    # The companion screen has a clock and a spinner, so it
+                    # ticks even while the terminal itself is idle. Only rows
+                    # that changed go on the wire.
+                    panel = self._panel_frame()
+                    if panel:
+                        self.link.queue(panel)
+                        self.bytes_out += len(panel)
+                    self.last_panel_time = now
 
                 if self.link in w or self.link.wants_write():
                     self.link.flush()

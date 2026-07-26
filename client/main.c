@@ -74,19 +74,26 @@ static unsigned char consumed;
 /* Host-settable: write 1 for characters or 2 for attributes and the main loop
    copies that VDC plane into mirrorBuf, then clears this back to 0. */
 unsigned char mirrorReq;
+unsigned char mirrorAddrHi, mirrorAddrLo;
 static unsigned int retry;
+/* Main-loop iterations since the last byte arrived. Wraps at 65536, which at
+   roughly 20k iterations a second is a quiet link of a few seconds. */
+static unsigned int idle;
 
 /* The 40-column VIC-II companion screen is written directly; it is small and
    updated rarely, so it does not need the VDC fast path. */
 #define VIC_SCREEN ((unsigned char *)0x0400)
 #define VIC_COLOR  ((unsigned char *)0xD800)
 
+static unsigned char panelColor = COLOR_GRAY2;
+static unsigned char panelOwned;   /* has the panel taken over the 40-col screen? */
+
 static void panel_write(unsigned char row, unsigned char col, unsigned char code)
 {
     unsigned int off = (unsigned int)row * 40u + col;
     if (row < 25 && col < 40) {
         VIC_SCREEN[off] = code;
-        VIC_COLOR[off] = COLOR_GRAY2;
+        VIC_COLOR[off] = panelColor;
     }
 }
 
@@ -117,6 +124,12 @@ static void bell(void)
  *
  * On a machine with no modem in front of the ACIA (VICE, or a real RS-232
  * cartridge) no RING ever arrives and this simply never fires.
+ *
+ * The caller only offers bytes that arrive between frames. That matters: the
+ * screen codes for an uppercase "RING" are byte-identical to the modem's, so
+ * scanning payload bytes would answer a call that never came. Gating on parser
+ * state removes the ambiguity, which in turn makes it safe to re-arm on every
+ * RING and reconnect automatically.
  */
 /* Explicit ASCII, not char literals: cc65 maps 'R' to PETSCII $D2 for CBM
    targets, which could never match the $52 the modem actually sends. */
@@ -126,15 +139,17 @@ static unsigned char answered;
 
 static void modem_watch(unsigned char b)
 {
-    if (answered)
-        return;
     if (b == RING[ringMatch]) {
         if (++ringMatch == 4) {
             static const unsigned char ata[4] = { 0x41, 0x54, 0x41, 0x0D };  /* "ATA" */
             unsigned char i;
             for (i = 0; i < 4; ++i)
                 acia_put(ata[i]);
+            /* A new call: forget the old session and ask for the screen again
+               once the modem has gone transparent. */
             answered = 1;
+            framesSeen = 0;
+            retry = 0;
             ringMatch = 0;
         }
     } else {
@@ -154,7 +169,7 @@ static void handle_byte(unsigned char b)
         case CMD_RUN:    argsNeeded = 4; break;
         case CMD_FILL:   argsNeeded = 5; break;
         case CMD_CURSOR: argsNeeded = 2; break;
-        case CMD_PANEL:  argsNeeded = 2; break;
+        case CMD_PANEL:  argsNeeded = 3; break;
         case CMD_HELLO:  argsNeeded = 2; break;
         case CMD_GLYPH:  argsNeeded = 1; break;
         case CMD_FRAME:  framesSeen = 1; return;
@@ -226,8 +241,15 @@ static void handle_byte(unsigned char b)
             return;
 
         case CMD_PANEL:
+            if (!panelOwned) {
+                /* First panel line: wipe the client's own startup text so the
+                   companion screen is entirely the bridge's to draw. */
+                panelOwned = 1;
+                clrscr();
+            }
             panelRow = args[0];
-            payloadNeeded = args[1];
+            panelColor = args[1] & 0x0F;
+            payloadNeeded = args[2];
             if (payloadNeeded == 0) {
                 state = S_OPCODE;
                 return;
@@ -366,6 +388,7 @@ int main(void)
        instead of starting from a partial picture. */
     consumed = 0;
     retry = 0;
+    idle = 0;
     send_control(CLIENT_RESYNC);
 
     while (running) {
@@ -375,6 +398,19 @@ int main(void)
            hardware the operator may start this before the bridge exists. */
         if (!framesSeen && ++retry == 0)
             send_control(CLIENT_RESYNC);
+
+        /* A frame cut off mid-payload leaves the parser stranded: it would read
+           the next command's bytes as pixels and never resynchronise. If the
+           link has been quiet that long and we are *not* between frames, the
+           frame was truncated - reset and ask for a fresh screen.
+
+           An idle link with the parser at rest is normal and must not trigger
+           anything: repainting on a timer would flood a link this slow. */
+        if (++idle == 0 && state != S_OPCODE) {
+            state = S_OPCODE;
+            framesSeen = 0;
+            retry = 0;
+        }
         /* Drain a bounded number of bytes before checking the keyboard, so a
            fast sender cannot starve input, and a burst still gets applied in
            one go rather than one byte per outer iteration. */
@@ -384,6 +420,12 @@ int main(void)
                    vdc_clear in isolation from the protocol path. */
                 vdcAttr = 0x0E;
                 vdc_clear();
+            } else if (mirrorReq == 5) {
+                /* Read VDC RAM at the address in mirrorAddrHi/Lo. */
+                vdcChar = 3;
+                vdcRow = mirrorAddrHi;
+                vdcCol = mirrorAddrLo;
+                vdc_mirror();
             } else {
                 vdcChar = mirrorReq - 1;  /* 0 = characters, 1 = attributes */
                 vdc_mirror();
@@ -393,6 +435,7 @@ int main(void)
         budget = 255;
         while (budget-- && acia_avail()) {
             unsigned char b = acia_get();
+            idle = 0;
             /* Every byte taken out of the ring is room the server may reuse.
                Acknowledging in units keeps the return traffic negligible while
                never letting the server run further ahead than the ring holds. */
@@ -400,7 +443,8 @@ int main(void)
                 consumed = 0;
                 send_control(CLIENT_CREDIT);
             }
-            modem_watch(b);
+            if (state == S_OPCODE)
+                modem_watch(b);
             handle_byte(b);
             if (answered == 1) {
                 /* Just answered the call. The modem is still parsing "ATA" and
