@@ -8,7 +8,37 @@ reimplemented and nothing is faked: the actual `claude` binary runs in a PTY,
 and what appears on the VDC is its real TUI, translated cell by cell into
 PETSCII and shipped over a 6551 ACIA at 38400 baud.
 
-This is what it looks like, read back out of the C128's own video RAM:
+This is the 80-column screen, read verbatim out of the C128's own video RAM
+while a session was running:
+
+```
+⏺ VIC-IIe (40-column composite) and VDC 8563 (80-column RGBI).
+
+✳ Cooked for 2s
+
+❯ one line: how much ram does a stock c128 have
+
+⏺ 128 KB of main RAM (two 64 KB banks), plus 16 KB of dedicated VDC video RAM
+  (64 KB on the C128D/later boards).
+
+✳ Baked for 2s
+
+❯ one line: what bus do commodore disk drives use
+
+⏺ The Commodore serial IEC bus (a serialized IEEE-488 derivative), with the
+  C128's fast-serial burst mode on a 1571/1581.
+
+✳ Worked for 2s
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  OPUS·5 (1m context) ❯ C128-DEMO │ CTX ░░░░░░ 8%/1M │ $0.64 ⏱2m RL░░░7% │ +2d…
+  ⏸ manual mode on · ← for agents
+```
+
+On a directory it has not seen before, Claude Code draws its full welcome box
+instead — rounded corners and all (account line removed here):
 
 ```
 ╭─── Claude Code v2.1.220 ─────────────────────────────────────────────────────╮
@@ -19,15 +49,25 @@ This is what it looks like, read back out of the C128's own video RAM:
 │                      ▝▜█████▛▘                     │ What's new              │
 │                        ▘▘ ▝▝                       │ Bug fixes and reliabil… │
 │   Opus 5 (1M context) with xhigh effort · Max      │ Added Claude Opus 5 ('… │
+│                   /tmp/c128-demo                   │ /release-notes for more │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+```
 
-❯ reply with only: GLYPHS OK
-⏺ GLYPHS OK
-✳ Churned for 1s
-────────────────────────────────────────────────────────────────────────────────
-❯
-────────────────────────────────────────────────────────────────────────────────
-  OPUS·5 (1m context) ❯ HOME │ $0.00 ⏱46s RL░░░4% │ +2dir
+The second monitor, on the 40-column VIC-II output, is a live status panel:
+
+```
+claude code                 c128 term
+----------------------------------------
+. claude code
+
+session   5m15s
+frames    190
+link      67.9 kb
+dropped   0   clean
+
+----------------------------------------
+HELP repaints / reconnects
+RUN-STOP + RESTORE quits
 ```
 
 The rounded corners, the block-graphic logo, the `❯` prompt, the `⏺` response
