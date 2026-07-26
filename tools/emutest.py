@@ -165,6 +165,10 @@ def main():
                    help="attach this d64 to drive 8 and let the C128 autoboot "
                         "it, instead of autostarting the .prg directly")
     p.add_argument("--keep", action="store_true", help="leave VICE running")
+    p.add_argument("--screenshot", metavar="PATH",
+                   help="grab the emulator's own video output to a PNG. Captures "
+                        "the X framebuffer VICE is drawing into, so it is what "
+                        "the machine actually displays, not a reconstruction")
     p.add_argument("--colours", action="store_true",
                    help="also read the colour plane and report which indices "
                         "are actually on screen")
@@ -190,7 +194,26 @@ def main():
     disp = free_display()
     env = dict(os.environ, __EGL_VENDOR_LIBRARY_FILENAMES=MESA_EGL, DISPLAY=f":{disp}")
 
-    xvfb = subprocess.Popen(["Xvfb", f":{disp}", "-screen", "0", "800x600x24"],
+    if args.machine == "c128":
+        # x128 opens two windows. With no window manager they both map at the
+        # origin and the VIC-II lands on top, so a root grab gets the 40-column
+        # status panel rather than the terminal. Put them side by side.
+        screen_geom = "1800x800x24"
+        window_opts = ["-windowxpos", "0", "-windowypos", "0",
+                       "-windowwidth", "780", "-windowheight", "620",
+                       "-windowxpos1", "800", "-windowypos1", "0",
+                       "-windowwidth1", "960", "-windowheight1", "620"]
+        # The VDC window, less the GTK menu bar, the status bar, and the grey
+        # letterboxing VICE puts either side of the canvas. Measured, not
+        # guessed: the canvas runs x 885..1674 within the root capture.
+        crop = "790x572+885+28"
+    else:
+        screen_geom = "800x600x24"
+        window_opts = []
+        # Same idea for the single VIC-II window; its canvas starts at x 48.
+        crop = "672x537+48+28"
+
+    xvfb = subprocess.Popen(["Xvfb", f":{disp}", "-screen", "0", screen_geom],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             env=dict(os.environ,
                                      __EGL_VENDOR_LIBRARY_FILENAMES=MESA_EGL))
@@ -219,6 +242,7 @@ def main():
         "-rsdev1", f"127.0.0.1:{link_port}", "-rsdev1baud", args.baud,
         "-binarymonitor", "-binarymonitoraddress", f"ip4://127.0.0.1:{mon_port}",
         "-sounddev", "dummy", "-jamaction", "0",
+    ] + window_opts + [
     ] + (["-8", os.path.abspath(args.bootdisk)] if args.bootdisk
          else ["-autostart", prg]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
@@ -248,6 +272,34 @@ def main():
             mem = mon.read(0x0000, cols * rows - 1, bank=banks["vdc"])
         mon.resume()
         print(render(mem, cols))
+
+        if args.screenshot:
+            # -exitscreenshot is unusable here: this VICE build reports
+            # "Requested graphics output driver PNG not found" and writes
+            # nothing, in any format. Grabbing the framebuffer sidesteps the
+            # missing driver and captures the same pixels.
+            os.makedirs(os.path.dirname(os.path.abspath(args.screenshot)) or ".",
+                        exist_ok=True)
+            grab = subprocess.run(
+                ["import", "-window", "root", "-display", f":{disp}",
+                 args.screenshot],
+                capture_output=True, text=True)
+            if grab.returncode != 0:
+                print(f"screenshot failed: {grab.stderr.strip()}", file=sys.stderr)
+                rc = 1
+            else:
+                # VICE sits on a black root window; trim it to the emulator's
+                # own output.
+                # Crop to the emulator's own canvas: on the C128 that selects
+                # the VDC window out of the pair, and on both it drops VICE's
+                # menu and status bars.
+                subprocess.run(["magick", args.screenshot, "-crop", crop,
+                                "+repage", args.screenshot], capture_output=True)
+                size = os.path.getsize(args.screenshot)
+                print(f"\nscreenshot: {args.screenshot} ({size} bytes)")
+                if size < 2000:
+                    print("screenshot looks empty", file=sys.stderr)
+                    rc = 1
 
         if args.colours:
             # Read the colour plane the same way the machine does: the VDC keeps

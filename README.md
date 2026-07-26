@@ -10,7 +10,18 @@ reimplemented and nothing is faked: the actual `claude` binary runs in a PTY,
 and what appears on the VDC is its real TUI, translated cell by cell into
 PETSCII and shipped over a 6551 ACIA at 38400 baud.
 
-This is the 80-column screen, read verbatim out of the C128's own video RAM
+Both machines, photographed off the emulator running the real `claude` binary —
+the C128's 80-column VDC on the left, the C64's 40-column VIC-II on the right:
+
+| C128 — 80 columns, VDC | C64 — 40 columns, VIC-II |
+|---|---|
+| ![Claude Code on the C128's 80-column VDC screen](docs/images/c128.png) | ![Claude Code on the C64's 40-column screen](docs/images/c64.png) |
+
+Claude Code lays itself out to whatever width the PTY reports, so the C64 gets a
+narrower version of the same interface rather than a cropped one. The logo is
+drawn in the orange each machine's palette actually has.
+
+And this is the 80-column screen read verbatim out of the C128's own video RAM
 while a session was running:
 
 ```
