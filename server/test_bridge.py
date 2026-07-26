@@ -242,6 +242,23 @@ def test_custom_glyphs_win_over_substitutes():
         check(all(0 <= b <= 255 for b in bmp), f"glyph ${code:02X} out of range")
 
 
+def test_ascii_that_charset2_breaks_has_a_glyph():
+    """Backslash, braces, tilde and caret must not render as letters.
+
+    Charset 2 reassigns $41-$5A to A-Z, so the PETSCII codes for these land on
+    letters or box drawing - a backslash came out as "M". In a tool for reading
+    code that is not cosmetic.
+    """
+    import font
+
+    for ch in ("\\", "{", "}", "~", "^"):
+        code = petscii.to_screen_code(ch)
+        check(code == font.CODES[ch],
+              f"{ch!r} renders as ${code:02X}, not its glyph")
+        check(not (0x41 <= code <= 0x5A),
+              f"{ch!r} maps to ${code:02X}, which charset 2 draws as a letter")
+
+
 def test_colors_map_to_claude_identity():
     # The logo shade is chosen, not nearest-matched: its real salmon lands on
     # grey, which is indistinguishable from body text on an RGBI monitor.
@@ -249,8 +266,10 @@ def test_colors_map_to_claude_identity():
           "logo colour not pinned")
     check(petscii.rgb_to_vdc(0xD7, 0x77, 0x57) == petscii.LOGO_COLOR,
           "older logo shade not pinned")
-    check(petscii.LOGO_COLOR not in (14, 1, 12, 9, 11),
-          "logo colour must not be grey, orange or pink")
+    # Grey is the one thing it must not be: that is the body-text colour, and
+    # the logo would vanish into the surrounding box.
+    check(petscii.LOGO_COLOR not in (14, 1),
+          "logo colour must not be grey - it would not stand out")
     check(petscii.rgb_to_vdc(0xFF, 0xC1, 0x07) == 13, "amber warning mismapped")
     check(petscii.rgb_to_vdc(0x00, 0x00, 0x00) == 0, "black mismapped")
     check(petscii.rgb_to_vdc(0xFF, 0xFF, 0xFF) == 15, "white mismapped")

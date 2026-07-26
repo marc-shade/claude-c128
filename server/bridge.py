@@ -285,7 +285,10 @@ class Bridge:
                 self.link.queue(enc.take())
                 if self.verbose:
                     print("[bridge] client is listening", file=sys.stderr)
-            self.link.reset_credit()
+            # Deliberately does NOT restore the credit window. The client's
+            # receive ring may still hold unread bytes; handing back a full
+            # window on top of those is exactly how it overruns. Credit is
+            # returned only as the client actually consumes.
             self.differ.reset()
             self.dirty = True
             self.last_panel = {}
@@ -412,7 +415,7 @@ class Bridge:
             pass
         finally:
             enc = protocol.Encoder()
-            enc.buf += bytes((protocol.CMD_BYE,))
+            enc.bye()
             try:
                 self.link.queue(enc.take())
                 self.link.flush()

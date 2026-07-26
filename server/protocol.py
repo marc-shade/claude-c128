@@ -19,7 +19,11 @@ CMD_FRAME = 0x05     # end of frame
 CMD_BELL = 0x06
 CMD_PANEL = 0x07     # row, colour, len, <len screen codes> -> VIC-II panel
 CMD_HELLO = 0x08     # cols, rows
-CMD_BYE = 0x09
+CMD_BYE = 0x09       # followed by BYE_MAGIC
+
+# A bare opcode is one bit-flip away from ending the session, so shutting the
+# client down takes a second byte that is unlikely to occur by accident.
+BYE_MAGIC = 0x5A
 CMD_GLYPH = 0x0A     # code, 8 bitmap bytes -> redefine a VDC character
 
 ATTR_UNDERLINE = 0x20
@@ -91,6 +95,9 @@ class Encoder:
 
     def hello(self, cols, rows):
         self.buf += bytes((CMD_HELLO, cols, rows))
+
+    def bye(self):
+        self.buf += bytes((CMD_BYE, BYE_MAGIC))
 
     def frame(self):
         self.buf += bytes((CMD_FRAME,))
@@ -228,6 +235,7 @@ def decode(data, sink):
         elif cmd == CMD_HELLO:
             i += 2
         elif cmd == CMD_BYE:
+            i += 1
             break
         else:
             raise ValueError(f"bad opcode {cmd:#04x} at offset {i - 1}")

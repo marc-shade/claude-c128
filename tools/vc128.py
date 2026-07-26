@@ -48,6 +48,8 @@ class VirtualC128:
         self.sink = PreviewSink(cols, rows)
         self.buf = b""
         self.panel = {}
+        self.glyphs = {}
+        self.consumed = 0
 
     def pump(self, timeout=0.2):
         """Read and apply whatever has arrived. Returns True if a frame landed."""
@@ -61,6 +63,15 @@ class VirtualC128:
         before = self.sink.frames
         consumed = self._consume()
         self.buf = self.buf[consumed:]
+
+        # Return credit exactly as the real client does. Without this the
+        # bridge stops after CREDIT_WINDOW bytes - which the glyph upload
+        # alone nearly fills - and the screen never arrives.
+        self.consumed += len(data)
+        while self.consumed >= protocol.CREDIT_UNIT:
+            self.consumed -= protocol.CREDIT_UNIT
+            self.sock.sendall(bytes((protocol.CLIENT_ESCAPE,
+                                     protocol.CLIENT_CREDIT)))
         return self.sink.frames > before
 
     def _consume(self):
@@ -94,15 +105,27 @@ class VirtualC128:
                 elif cmd == protocol.CMD_BELL:
                     self.sink.bell()
                 elif cmd == protocol.CMD_PANEL:
-                    row, ln = data[i], data[i + 1]
-                    i += 2
+                    row, color, ln = data[i], data[i + 1], data[i + 2]
+                    i += 3
                     if i + ln > n:
                         return start
                     self.panel[row] = bytes(data[i:i + ln]); i += ln
+                elif cmd == protocol.CMD_GLYPH:
+                    if i + 9 > n:
+                        return start
+                    # Record the definition so the viewer renders the same
+                    # glyph the C128 will, rather than a stand-in.
+                    self.glyphs[data[i]] = bytes(data[i + 1:i + 9])
+                    i += 9
                 elif cmd == protocol.CMD_HELLO:
                     i += 2
                 elif cmd == protocol.CMD_BYE:
-                    raise ConnectionError("bridge said goodbye")
+                    if i >= n:
+                        return start
+                    magic = data[i]
+                    i += 1
+                    if magic == protocol.BYE_MAGIC:
+                        raise ConnectionError("bridge said goodbye")
                 else:
                     raise ValueError(f"bad opcode {cmd:#04x}")
             except IndexError:

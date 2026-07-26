@@ -45,6 +45,18 @@ extern unsigned char mirrorBuf[2048];
 #define CMD_HELLO   0x08
 #define CMD_BYE     0x09
 #define CMD_GLYPH   0x0A
+#define BYE_MAGIC   0x5A
+
+/* --- client -> server control ------------------------------------------- */
+#define CLIENT_ESCAPE 0x00
+#define CLIENT_RESYNC 0x01
+#define CLIENT_BYE    0x02
+#define CLIENT_CREDIT 0x03
+/* Must match CREDIT_UNIT in server/protocol.py. */
+#define CREDIT_UNIT   64
+
+#define KEY_HELP      0x84      /* C128 HELP key */
+
 
 #define CURSOR_HIDE 0xFF
 
@@ -79,6 +91,10 @@ static unsigned int retry;
 /* Main-loop iterations since the last byte arrived. Wraps at 65536, which at
    roughly 20k iterations a second is a quiet link of a few seconds. */
 static unsigned int idle;
+unsigned int desyncs;   /* unrecognised opcodes seen */
+/* Non-zero while a resync is outstanding; cleared when a frame arrives or the
+   idle watchdog fires, so one desync cannot trigger a repaint storm. */
+static unsigned char resyncCooldown;
 
 /* The 40-column VIC-II companion screen is written directly; it is small and
    updated rarely, so it does not need the VDC fast path. */
@@ -97,20 +113,29 @@ static void panel_write(unsigned char row, unsigned char col, unsigned char code
     }
 }
 
+/* Main-loop passes left before the bell note is released. Counting down in the
+   loop rather than spinning here keeps the receive path free: a blocking delay
+   long enough to be audible would overrun the ACIA. */
+static unsigned int bellTimer;
+unsigned int bellCount;          /* exported so a test can prove it fired */
+
 static void bell(void)
 {
-    /* A short blip on SID voice 3 rather than the KERNAL bell, which would
-       write to the 40-column screen we are using as a status panel. */
-    unsigned char i;
-    SID.v3.freq = 0x2000;
-    SID.v3.ad = 0x09;
-    SID.v3.sr = 0x00;
-    SID.amp = 0x0F;
-    SID.v3.ctrl = 0x21;
-    for (i = 0; i < 120; ++i) {
-        /* deliberate short spin: the blip must not stall the receive loop */
-    }
-    SID.v3.ctrl = 0x20;
+    /* SID voice 3 rather than the KERNAL bell, which would write to the
+       40-column screen we are using as a status panel. */
+    SID.v3.freq = 0x3000;
+    SID.v3.ad = 0x1A;            /* fast attack, medium decay */
+    SID.v3.sr = 0xF0;            /* full sustain */
+    SID.amp = 0x1F;              /* volume 15, low-pass off */
+    SID.v3.ctrl = 0x11;          /* triangle, gate on */
+    bellTimer = 6000;
+    ++bellCount;
+}
+
+static void bell_tick(void)
+{
+    if (bellTimer && --bellTimer == 0)
+        SID.v3.ctrl = 0x10;      /* gate off - release the note */
 }
 
 /*
@@ -157,6 +182,8 @@ static void modem_watch(unsigned char b)
     }
 }
 
+static void send_control(unsigned char code);
+
 static void handle_byte(unsigned char b)
 {
     switch (state) {
@@ -172,11 +199,20 @@ static void handle_byte(unsigned char b)
         case CMD_PANEL:  argsNeeded = 3; break;
         case CMD_HELLO:  argsNeeded = 2; break;
         case CMD_GLYPH:  argsNeeded = 1; break;
-        case CMD_FRAME:  framesSeen = 1; return;
+        case CMD_FRAME:  framesSeen = 1; resyncCooldown = 0; return;
         case CMD_BELL:   bell(); return;
-        case CMD_BYE:    running = 0; return;
+        case CMD_BYE:    argsNeeded = 1; break;
         default:
-            /* Desynchronised: ignore until something parses again. */
+            /* An unrecognised opcode means the stream is out of step. Ask for a
+               repaint, which resynchronises the parser - but at most once per
+               cooldown. Asking per stray byte turns one desync into a storm:
+               every request costs a full 2KB repaint, which overruns the ring
+               and produces more stray bytes. */
+            ++desyncs;
+            if (resyncCooldown == 0) {
+                resyncCooldown = 1;
+                send_control(CLIENT_RESYNC);
+            }
             return;
         }
         state = S_ARGS;
@@ -257,6 +293,14 @@ static void handle_byte(unsigned char b)
             state = S_PANEL_PAYLOAD;
             return;
 
+        case CMD_BYE:
+            /* A bare opcode would let one corrupted byte end the session, so
+               the shutdown is confirmed by a magic byte. */
+            if (b == BYE_MAGIC)
+                running = 0;
+            state = S_OPCODE;
+            return;
+
         case CMD_HELLO:
         default:
             state = S_OPCODE;
@@ -290,16 +334,6 @@ static void handle_byte(unsigned char b)
         return;
     }
 }
-
-/* --- client -> server control ------------------------------------------- */
-#define CLIENT_ESCAPE 0x00
-#define CLIENT_RESYNC 0x01
-#define CLIENT_BYE    0x02
-#define CLIENT_CREDIT 0x03
-/* Must match CREDIT_UNIT in server/protocol.py. */
-#define CREDIT_UNIT   64
-
-#define KEY_HELP      0x84      /* C128 HELP key */
 
 static void send_control(unsigned char code)
 {
@@ -432,6 +466,7 @@ int main(void)
             }
             mirrorReq = 0;
         }
+        bell_tick();
         budget = 255;
         while (budget-- && acia_avail()) {
             unsigned char b = acia_get();

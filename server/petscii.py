@@ -184,12 +184,12 @@ VDC_PALETTE = [
 BLACK, WHITE, LIGHT_GREY, DARK_GREY = 0, 15, 14, 1
 
 # The colour the Claude Code logo is drawn in. Its real shade is a salmon that
-# nearest-match sends to grey, and neither grey nor the faithful pink reads well
-# on an RGBI monitor, so it is chosen deliberately. Any VDC index works:
+# nearest-match sends to grey, indistinguishable from body text, so it is
+# chosen deliberately rather than derived. Any VDC index works:
 #   0 black  1 dk grey  2 blue   3 lt blue  4 green   5 lt green  6 cyan
 #   7 lt cyan 8 red     9 lt red 10 purple 11 lt purple 12 brown 13 yellow
 #   14 lt grey 15 white
-LOGO_COLOR = 7            # light cyan
+LOGO_COLOR = 11           # light purple - reads as pink on RGBI
 
 # Claude Code's palette, pinned by hand so its identity colors land on the
 # right VDC entries instead of drifting to whatever nearest-RGB picks.

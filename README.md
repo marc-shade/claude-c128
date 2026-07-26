@@ -205,6 +205,19 @@ Compute `code*16` separately, then add the base. `tools/vdcpeek.py` can read
 the definitions back out of VDC RAM, which is the only way to check this
 without staring at the monitor.
 
+**Flow control must not be handed back on a resync.** A resync means the client
+lost its place, not that its receive ring is empty. Restoring the full credit
+window on top of bytes it has not read yet is precisely how the ring overruns -
+which produces more stray bytes, more resync requests, and a repaint storm that
+never converges. Credit is returned only as the client actually consumes.
+
+For the same reason a stray byte asks for a repaint at most once per cooldown:
+each request costs a full 2KB repaint, so reacting to every unrecognised byte
+turns one desync into a feedback loop.
+
+**A bare opcode should not be able to end the session.** `CMD_BYE` takes a magic
+second byte, because one corrupted byte was enough to shut the terminal down.
+
 ## Two traps that cost the most time
 
 **Reading the ACIA over DMA destroys the link.** `readmem $DE00` pops a byte off
