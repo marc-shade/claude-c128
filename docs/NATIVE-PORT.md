@@ -5,12 +5,18 @@ TLS 1.3, and the C128 has no way to do it. This document records what was
 actually measured while investigating whether the Ultimate II+ cartridge could
 do the TLS instead, removing the host from the picture.
 
-**Status: blocked on one FPGA rebuild.** The code exists, builds, and fits in
-flash with 209 KB spare, and needs about 10 KB of RAM. It refuses to run, and
-even if it ran it would take roughly 96 seconds per handshake. Both of those come
-from the same place — the FPGA image has no entropy source and its Nios II core
-has no multiplier — and one Quartus rebuild fixes both, taking the handshake to
-about 1.6 seconds. Measurements below.
+**Status: it fits, and it is far too slow to be worth flashing.** The code
+builds, fits in flash with 209 KB spare, and needs about 10 KB of RAM. It refuses
+to run for lack of an entropy source. And a handshake costs **3.5 billion
+instructions** — measured, not estimated — which is around five and a half
+minutes on this core, or a minute even with a hardware multiplier added.
+
+An earlier version of this document put that figure at 96 seconds and claimed a
+hardware multiplier would cut it to 1.6 s. Both were wrong, and wrong in the
+flattering direction. They came from static disassembly plus an assumption that
+one hot function dominated; it does not. Building an instruction-set simulator
+(`tools/nios2-sim`) and running the real code settled it. The corrected numbers
+are below, along with what the mistake was.
 
 Nothing has been flashed to any device.
 
@@ -236,77 +242,84 @@ and keep the stack linked. If the cartridge were ever shipped without a
 solution to entropy, those should be compiled out too so the flash is not spent
 on code that refuses to run.
 
-## Handshake cost, and the thing that actually decides this
+## Handshake cost
 
-This was the open question, and answering it changes the recommendation.
+This was the open question. It is now measured rather than derived, and the
+measurement contradicted the derivation badly enough to change the conclusion.
 
 The CPU is the **Nios II/e economy core** — `ALT_CPU_CPU_IMPLEMENTATION "tiny"`
-in the generated BSP. No caches, no barrel shifter, and no multiplier. Because
-mbedTLS ships no nios2 assembly, its bignum code falls back to generic C, and
-GCC lowers each limb-wise multiply-accumulate to a `__muldi3` call. From the
-disassembly of the real firmware:
+in the generated BSP. No caches, no barrel shifter, no multiplier. Because
+mbedTLS ships no nios2 assembly, its bignum code falls back to generic C and GCC
+lowers each limb-wise multiply-accumulate to a `__muldi3` call, which calls
+`__mulsi3` six times, each a 7-instruction shift-add loop.
 
-- `__muldi3` calls `__mulsi3` **six** times: four with 16-bit first operands,
-  two with full 32-bit ones
-- `__mulsi3` is a 7-instruction shift-add loop that iterates once per bit of its
-  **first** operand — it tests `r4` — so the two full-width calls run ~32
-  iterations each even though the other operand is the zero high word of a
-  widened 32-bit value
-- total: **~999 instructions for one limb multiply-accumulate**
+### What the simulator says
 
-The number of those operations is a property of the algorithm, not the host, so
-it can be counted anywhere. `hosttest/bench` instruments the real `bignum_core.c`
-and counts them for an ECDHE-ECDSA P-256 client: ephemeral keygen, ECDH shared
-secret, and two ECDSA verifications for a leaf + intermediate chain.
+There is no way to run Nios II code on a current machine — QEMU removed the
+target — so `tools/nios2-sim` was written for this. It counts instructions and
+validates itself by computing a P-256 shared secret that must match the host byte
+for byte; a single wrong carry in 585 million instructions would change it.
 
-**1,000,000 limb multiply-accumulates per handshake.** At ~999 instructions each
-that is 998.6 M instructions. At 62.5 MHz:
+Measured, for the public-key work of one ECDHE-ECDSA P-256 handshake
+(ephemeral keygen + ECDH + two ECDSA verifications for a leaf and an
+intermediate), at 62.5 MHz:
 
-| | instructions | @1 CPI (floor) | @6 CPI |
-|---|---|---|---|
-| as configured here | 998.6 M | 16.0 s | **95.9 s** |
-| with untrimmed ECP settings | 558.5 M | 8.9 s | 53.6 s |
+| core | ECP config | instructions | @1 CPI | @6 CPI |
+|---|---|---|---|---|
+| no multiplier | as shipped here (w=2, no fixed-point) | 3,505 M | 56 s | **336 s** |
+| no multiplier | untrimmed (w=4, fixed-point) | 1,962 M | 31 s | 188 s |
+| hardware multiply | as shipped here | 688 M | 11 s | 66 s |
+| hardware multiply | untrimmed | 388 M | **6.2 s** | 37 s |
 
-1 CPI is a floor no multi-cycle core can beat, so the conclusion does not depend
-on knowing the exact CPI: **even at a physically impossible 1 CPI this is 16
-seconds.** (The 6 CPI figure usually quoted for Nios II/e could not be verified
-from a local source and is labelled an assumption.)
+1 CPI is a floor no multi-cycle core can reach, so it bounds the best case; the
+6 CPI figure usually quoted for the Nios II/e could not be verified from a local
+source and is an assumption, which is why both columns are given.
 
-Note the second row: trimming mbedTLS to fit flash — `MBEDTLS_ECP_WINDOW_SIZE`
-from 4 down to 2, and `MBEDTLS_ECP_FIXED_POINT_OPTIM` off — costs **1.79× in
-speed**. That was a deliberate trade to fit the partition, and it is reversible
-if flash is freed elsewhere.
+Per-phase, without a multiplier: keygen 584.6 M, ECDH 584.7 M, one ECDSA verify
+1,168.1 M. Verify costs almost exactly two scalar multiplications, which is what
+it should — `u1·G + u2·Q` — and that internal consistency is a small check on
+the numbers.
 
-### The same FPGA rebuild fixes both blockers
+### What was wrong before, and why
 
-Recompiling `bignum_core.c` with `-mhw-mul -mhw-mulx` and disassembling it gives
-a measured, not estimated, answer: **zero libgcc calls**. The multiply inlines to
-18 `mul`/`mulxuu` instructions and `mla` shrinks from 183 instructions plus 9
-`__muldi3` calls to 137 instructions total — at most 17 per limb, charging
-prologue and epilogue against every limb.
+An earlier version of this document reported **998.6 M** instructions without a
+multiplier and **17.0 M** with one, for a 59× speedup. Measured: **3,505 M** and
+**688 M**, a **5.1×** speedup. So the baseline was optimistic by 3.5×, the
+hardware-multiply figure by 40×, and the headline speedup by 11×.
 
-| | instructions | @1 CPI | @6 CPI |
-|---|---|---|---|
-| hw multiply, as configured | 17.0 M | 0.27 s | **1.6 s** |
-| hw multiply, untrimmed ECP | 9.5 M | 0.15 s | 0.9 s |
+The error was methodological, not arithmetic. Those figures came from counting
+limb multiply-accumulates and multiplying by the instruction cost of one, taken
+from disassembly. Both inputs were about right. The mistake was assuming that
+one function's cost *was* the total: the surrounding work — modular reduction,
+constant-time conditional copies, `mbedtls_mpi` grow/copy/free, Montgomery
+setup, and the modular inversion inside ECDSA verify — is the majority of the
+instructions. Scaling one component by its own speedup and calling it the whole
+is Amdahl's law, and it was ignored.
 
-**A multiplier turns a 96-second handshake into roughly 1.6 seconds — a 59×
-improvement — and it is the same Quartus rebuild that would add the
-ring-oscillator TRNG.** Enabling hardware multiply in the Nios II core and
-instantiating a TRNG are both Qsys/Quartus changes to the same design.
+The lesson is not subtle: a derived number that has never been executed should
+be labelled as such and treated as provisional. It was labelled, but it was also
+put in the summary line, which is where it did the damage.
 
-So the honest summary is not "too slow" and not "blocked on entropy". It is:
+### So what would it take
 
 - **Flash**: fits, 209 KB spare. Solved in software.
 - **RAM**: peak mbedTLS heap during the public-key work is **2.2 KB**, plus the
   two 4 KB record buffers — about 10.2 KB before FreeRTOS task stacks. Never a
   concern.
-- **Entropy and speed**: neither is solvable in software on this FPGA image, and
-  **both are solvable by one FPGA rebuild.** That rebuild is the whole remaining
-  project.
+- **Entropy**: needs a TRNG in the FPGA design.
+- **Speed**: a hardware multiplier is worth 5.1×, and restoring the ECP settings
+  that were trimmed to fit flash is worth another 1.8×. Together they take 336 s
+  down to 37 s — still unusable. Getting to the 6.2 s figure needs ~1 CPI, which
+  means replacing the "tiny" core with the pipelined Nios II/f and its caches.
 
-Without touching the FPGA, this stays a research artifact: it builds, it fits,
-and it refuses to run.
+That is a real FPGA redesign — new core, new peripheral, more logic — not a
+recompile, and whether the Cyclone IV on this board has the room for it is
+unknown here. Even then the result is a handshake measured in seconds, tolerable
+only because TLS session resumption would let subsequent connections skip it.
+
+The honest recommendation is that the host-based design this repository actually
+ships is the right one, and that the cartridge port is interesting rather than
+practical.
 
 ## What remains unverified
 
@@ -314,15 +327,17 @@ and it refuses to run.
   and operation-count verification. Whether mbedTLS 3.6 completes a TLS 1.3
   handshake against a real server on this core is unknown, and cannot be known
   while `Connect()` refuses.
-- **The timings are computed, not observed.** The operation counts are measured
-  exactly and the per-operation instruction costs come from real disassembly, but
-  nothing was executed on a Nios II. There is no simulator available to fix this:
-  QEMU removed the nios2 target, and 10.1.5 is what this machine has. The
-  cycles-per-instruction figure is an assumption, which is why the tables give a
-  1-CPI floor — the conclusions are stated so they hold across the range.
-- **The hardware-multiply figures assume the rest of the system is unchanged.**
-  Only `bignum_core.c` was recompiled with `-mhw-mul`; a real Qsys change might
-  also alter clock frequency or add caches, in either direction.
+- **Instruction counts are measured; cycle counts are not.** `tools/nios2-sim`
+  executes the real code and counts instructions, and validates itself against
+  host-computed P-256 results. It is not cycle-accurate: cycles-per-instruction
+  is an input, which is why every table gives both a 1-CPI floor and 6 CPI.
+- **The simulator models the Nios II/e's absence of caches by having none.** That
+  is right for this core and wrong for the /f, so the 1-CPI column is a bound
+  rather than a prediction of what an /f would do — cache misses on a real
+  pipelined core would push it above 1 CPI.
+- **The hardware-multiply figures assume nothing else changes.** Only the
+  compiler flag differs; a real Qsys change might also alter clock frequency or
+  memory latency, in either direction.
 - **Entropy quality is unverified**, and cannot be verified off-hardware. Only
   the accounting is tested.
 - **Nothing has been flashed.** No image has been written to any device.
