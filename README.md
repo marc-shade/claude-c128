@@ -172,6 +172,10 @@ On a C64 the repaint key is **F7**, since it has no HELP key.
 On the C128 the 40-column screen shows a status panel: activity, session clock,
 frames sent, bytes on the wire, and the count of any dropped bytes.
 
+When Claude Code rings the terminal bell it is played on SID voice 3 rather than
+through the KERNAL, which would write to the 40-column screen the panel is using.
+Confirmed audible on the real machine.
+
 ### On a C64
 
 ```sh
@@ -273,8 +277,6 @@ Known limitations:
   name, so gaps are visible rather than silent.
 - **Only tested on an Ultimate II+, firmware 3.11.** The Ultimate 64 exposes the
   same API and should work, but nobody has tried it.
-- **The bell is unverified.** The command arrives and the SID registers are
-  written; whether it is audible has not been confirmed.
 - **The C64 has no underline or blink**, and 40 columns truncates long lines.
   See the C64 notes above.
 - **The C64 client has run on a C128 in C64 mode, not on a physical C64.**
