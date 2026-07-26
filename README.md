@@ -99,6 +99,9 @@ python3 tools/vc128.py --connect 127.0.0.1:6400 --interactive
 | `server/font.py` | custom VDC glyphs, drawn as editable 8x8 art |
 | `tools/vdcpeek.py` | read the real 80-column screen back over the network |
 | `tools/hwrun.py` | bring-up and verification against the real machine |
+| `tools/mkbootdisk.py` | build the autobooting D64 |
+| `tools/hwtype.py` | type on the real C128 from the host, for testing |
+| `server/bootstrap.py` | mount the boot disk and reset, idempotently |
 
 ## Things that were not obvious
 
@@ -225,6 +228,39 @@ turns one desync into a feedback loop.
 
 **A bare opcode should not be able to end the session.** `CMD_BYE` takes a magic
 second byte, because one corrupted byte was enough to shut the terminal down.
+
+**Autoboot is a C128 KERNAL feature, and the Ultimate cannot replace it.** On
+every reset the C128 reads track 1 sector 0 of device 8 and, if it starts with
+`CBM`, prints `BOOTING <message>` and JSRs the code that follows. The boot code
+here stuffs `RUN"C"` into the keyboard buffer and returns, so BASIC starts the
+client — the same mechanism the network deploy path uses. The program on the
+boot disk is named `c` because the keyboard buffer holds ten characters and
+`RUN"CLAUDE"` needs twelve.
+
+Two things about writing that sector by hand, both of which the emulator caught
+and either of which would have hung the machine on every power-on:
+
+* **Put the `rts` before the data, not after.** With the string after the code
+  but the `rts` after the string, execution fell through `RUN"C"` and ran the
+  text as instructions — the emulator stopped with `PC=$0B2C`, inside the
+  string, and every client counter reading uninitialised garbage.
+* **Compute the branch displacement, don't write it.** A hand-written `bpl -8`
+  was one byte short of the loop start and would have branched into the middle
+  of an instruction. `mkbootdisk.py` derives it and range-checks it.
+
+**The Ultimate has no "mount an image at startup" setting** — every config
+category was checked. So a cold power-on leaves drive A empty and nothing
+autoboots, and the always-on Linux side has to do the bring-up:
+`server/bootstrap.py` mounts the boot disk and resets. It decides whether a
+client is already running by looking for the client's name on the 40-column
+screen at `$0400`, **not** by reading the ACIA — probing `$DE00-$DE03` would
+pop bytes off the 6551 and corrupt a live session. That makes it idempotent, so
+the service can re-run it on every restart without ever disturbing a session in
+use.
+
+The boot disk lives on the Ultimate's own storage at `/Usb0/claude-boot.d64`,
+uploaded over **FTP** (anonymous login works); the REST file-upload endpoint is
+unimplemented in firmware 3.11.
 
 ## Two traps that cost the most time
 

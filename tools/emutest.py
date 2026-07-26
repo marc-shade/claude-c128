@@ -159,6 +159,9 @@ def main():
     p.add_argument("--settle", type=float, default=12.0)
     p.add_argument("--baud", default="38400")
     p.add_argument("--rate", type=int, default=3840)
+    p.add_argument("--bootdisk",
+                   help="attach this d64 to drive 8 and let the C128 autoboot "
+                        "it, instead of autostarting the .prg directly")
     p.add_argument("--keep", action="store_true", help="leave VICE running")
     args = p.parse_args()
 
@@ -199,8 +202,8 @@ def main():
         "-rsdev1", f"127.0.0.1:{link_port}", "-rsdev1baud", args.baud,
         "-binarymonitor", "-binarymonitoraddress", f"ip4://127.0.0.1:{mon_port}",
         "-sounddev", "dummy", "-jamaction", "0",
-        "-autostart", PRG,
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    ] + (["-8", os.path.abspath(args.bootdisk)] if args.bootdisk
+         else ["-autostart", PRG]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
     rc = 0
     try:

@@ -6,9 +6,25 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/code/claude-c128
+
+# The Ultimate II+ has no "mount an image at startup" setting, so a cold
+# power-on leaves drive A empty and nothing autoboots. This mounts the boot
+# disk and resets the machine, and does nothing at all if a client is already
+# running — so a bridge restart never disturbs a session in use.
+ExecStartPre=/usr/bin/python3 %h/code/claude-c128/server/bootstrap.py
+
 ExecStart=/usr/bin/python3 %h/code/claude-c128/server/bridge.py --connect 192.168.1.237:3000 --command claude --cwd %h -v
+
+# Bringing the C128 up takes about 30s, so the start timeout has to clear that.
+TimeoutStartSec=120
+
+# The bridge exits 0 when Claude Code quits on its own (nothing left to serve,
+# stay down) and 1 on a link failure, so this only respawns for a lost link —
+# and each respawn re-runs the bootstrap, which is how powering the C128 on
+# later gets picked up on its own.
 Restart=on-failure
-RestartSec=5
+RestartSec=15
+
 StandardOutput=append:%h/code/claude-c128/bridge.log
 StandardError=inherit
 

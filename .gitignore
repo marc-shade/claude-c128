@@ -4,3 +4,9 @@ __pycache__/
 *.log
 *.raw
 ptyraw.bin
+
+# Bind-mount artifacts the Claude Code Bash sandbox creates in every working
+# directory. Both are /dev/null character devices, not real files, and git
+# refuses to add them.
+.claude/
+.mcp.json
