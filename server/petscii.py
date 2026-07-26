@@ -12,6 +12,7 @@ $6B-$73, $7B-$7F and $A0+, and gives up only codes $41-$5A, which become A-Z.
 
 import unicodedata
 
+import derive
 import font
 
 ROM_PATH = "/usr/share/vice/C128/chargen-390059-01.bin"
@@ -79,7 +80,6 @@ SUBSTITUTES = {
     "›": ">",    # ›
     "‣": ">",    # ‣
     "⎿": "└",   # ⎿ tool-result elbow -> └
-    "└─": None,  # (handled by the box glyphs above)
     "⏸": "|",    # ⏸ pause
     "⚠": "!",    # ⚠ warning
     "✳": "*",    # ✳ Claude asterisk
@@ -111,6 +111,73 @@ SUBSTITUTES = {
 
 # Braille spinner frames (U+2800 block) -> a rotating ASCII stand-in.
 SPINNER = "|/-\\"
+
+
+# How a character reached the screen. Returned by render_path so callers can
+# tell a deliberate stand-in from a failure: mapping the inverted question mark
+# to "?" is correct, while falling through to "?" is a coverage gap, and the
+# resulting screen code is identical.
+# Characters that reached the screen as a question mark, with how many times.
+# The block sweep in tools/charaudit.py cannot cover everything a terminal might
+# show - CJK, emoji, symbols nobody thought of - so the renderer records its own
+# misses and the bridge logs them. Real usage is what closes the last gaps.
+UNMAPPED_SEEN = {}
+
+
+def take_unmapped():
+    """New misses since the last call, as {char: count}. Clears the record."""
+    seen = dict(UNMAPPED_SEEN)
+    UNMAPPED_SEEN.clear()
+    return seen
+
+
+EXACT = "exact"           # a drawn glyph or a real PETSCII shape
+STAND_IN = "stand-in"     # a deliberate one-cell approximation
+UNMAPPED = "unmapped"     # nothing applied; rendered as a question mark
+
+
+def _accent_base(ch):
+    """The base letter of an accented letter, or None.
+
+    Restricted to letters on purpose. Many mathematical symbols decompose to a
+    base plus a combining slash - dropping it turns "not equal" into "equal",
+    which is worse than any fallback because it inverts the meaning.
+    """
+    folded = "".join(c for c in unicodedata.normalize("NFD", ch)
+                     if not unicodedata.combining(c))
+    if not folded or folded[0] == ch:
+        return None
+    if not unicodedata.category(folded[0]).startswith("L"):
+        return None
+    return folded[0]
+
+
+def render_path(ch: str):
+    """(kind, code, via) for one character. The single source of truth for
+    both the coverage audit and the bridge's runtime logging."""
+    code = font.CODES.get(ch)
+    if code is not None:
+        return EXACT, code, "glyph"
+    if ch in GLYPHS:
+        return EXACT, GLYPHS[ch], "petscii"
+    if ch in SUBSTITUTES:
+        return STAND_IN, to_screen_code(ch), "substitute"
+
+    o = ord(ch)
+    if 0x2800 <= o <= 0x28FF:
+        return STAND_IN, to_screen_code(ch), "braille"
+    if o < 0x20:
+        return STAND_IN, 0x20, "control"
+    if 0x20 <= o <= 0x7E:
+        return EXACT, to_screen_code(ch), "ascii"
+
+    if _accent_base(ch):
+        return STAND_IN, to_screen_code(ch), "accent-fold"
+
+    if derive.derive(ch) is not None:
+        return STAND_IN, to_screen_code(ch), "derived"
+
+    return UNMAPPED, 0x3F, "none"
 
 
 def to_screen_code(ch: str) -> int:
@@ -168,11 +235,22 @@ def to_screen_code(ch: str) -> int:
     # words like "Sautéed" and "Café", and a '?' in the middle of one reads as
     # corruption rather than as a missing accent. Decomposing and dropping the
     # combining marks handles the whole range without a lookup table.
-    folded = "".join(c for c in unicodedata.normalize("NFD", ch)
-                     if not unicodedata.combining(c))
-    if folded and folded[0] != ch:
-        return to_screen_code(folded[0])
+    base = _accent_base(ch)
+    if base:
+        return to_screen_code(base)
 
+    # Last resort before giving up: derive a stand-in from the Unicode name.
+    # This is what covers whole blocks - box drawing, partial blocks, arrows,
+    # geometric shapes, Greek - by their structure rather than by enumeration.
+    stand_in = derive.derive(ch)
+    if stand_in is not None:
+        if stand_in == "":
+            return 0x20                             # zero-width -> blank cell
+        if stand_in != ch:
+            return to_screen_code(stand_in)
+
+    if ch != "?":
+        UNMAPPED_SEEN[ch] = UNMAPPED_SEEN.get(ch, 0) + 1
     return 0x3F                                     # genuinely unknown -> '?'
 
 

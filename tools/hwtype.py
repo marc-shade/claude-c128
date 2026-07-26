@@ -45,8 +45,17 @@ def poke(addr, data):
 
 
 def to_petscii(ch):
-    """ASCII -> the code an unshifted C128 key produces."""
+    """ASCII -> the code an unshifted C128 key produces.
+
+    Only ASCII: this is emulating physical keypresses, and the C128 keyboard has
+    no key for a box-drawing character. To get such characters onto the screen,
+    have Claude Code emit them instead of trying to type them.
+    """
     o = ord(ch)
+    if o > 0x7E:
+        raise SystemExit(
+            f"cannot type {ch!r} (U+{o:04X}): the C128 keyboard has no such key. "
+            f"Ask Claude Code to output it instead.")
     if 0x61 <= o <= 0x7A:       # a-z  -> $41-$5A, which the bridge folds back
         return o - 0x20
     if 0x41 <= o <= 0x5A:       # A-Z  -> shifted

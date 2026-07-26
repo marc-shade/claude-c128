@@ -328,6 +328,85 @@ def test_accented_letters_fold_to_their_base():
     check(not bad, "accent folding wrong for: " + ", ".join(bad))
 
 
+def test_every_must_cover_block_is_complete():
+    """No character in a must-cover Unicode block may reach the screen as '?'.
+
+    The terminal shows arbitrary text - file contents, source, command output -
+    so coverage cannot be argued from the chrome Claude Code happens to draw.
+    This is the same sweep tools/charaudit.py runs, pinned as a test.
+    """
+    import unicodedata
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "tools"))
+    import charaudit
+
+    problems = []
+    for name, lo, hi, must in charaudit.BLOCKS:
+        if not must:
+            continue
+        for cp in range(lo, hi + 1):
+            ch = chr(cp)
+            if unicodedata.category(ch).startswith("C"):
+                continue
+            kind, _, _ = petscii.render_path(ch)
+            if kind == petscii.UNMAPPED:
+                problems.append(f"{name} U+{cp:04X} "
+                                f"{unicodedata.name(ch, '(unnamed)')}")
+    check(not problems,
+          f"{len(problems)} uncovered: " + "; ".join(problems[:8]))
+
+
+def test_box_drawing_reduces_to_matching_arms():
+    """Heavy, double and dashed box characters must keep their shape.
+
+    Every character in U+2500-257F is some combination of up/down/left/right
+    arms, so each must land on the light-line glyph with the same arms - not on
+    a different junction. A substring match on "UP" inside "QUADRUPLE" turned
+    every quadruple-dash horizontal into an up-tee, which this pins.
+    """
+    inv = petscii.inverse_map()
+    cases = {
+        "━": "─", "┃": "│", "═": "─", "║": "│",       # heavy and double lines
+        "┄": "─", "┅": "─", "┈": "─", "┉": "─",       # dashed horizontals
+        "┆": "│", "┇": "│", "┊": "│", "┋": "│",       # dashed verticals
+        "┏": "┌", "┓": "┐", "┗": "└", "┛": "┘",       # heavy corners
+        "╔": "┌", "╗": "┐", "╚": "└", "╝": "┘",       # double corners
+        "┣": "├", "┫": "┤", "┳": "┬", "┻": "┴", "╋": "┼",
+        "╠": "├", "╣": "┤", "╦": "┬", "╩": "┴", "╬": "┼",
+    }
+    bad = [f"{c}->{inv.get(petscii.to_screen_code(c))!r} (want {w!r})"
+           for c, w in cases.items()
+           if inv.get(petscii.to_screen_code(c)) != w]
+    check(not bad, "box drawing mis-mapped: " + ", ".join(bad))
+
+
+def test_negation_is_never_folded_away():
+    """A combining slash must not be dropped: it inverts the meaning.
+
+    NFD-decomposing accented letters is right, but the same decomposition turns
+    U+2260 NOT EQUAL TO into "=", which is worse than any fallback because the
+    screen would then assert the opposite of the truth.
+    """
+    inv = petscii.inverse_map()
+    for ch, forbidden in (("≠", "="), ("∉", "e"), ("∌", "e"),
+                          ("≁", "~"), ("≄", "=")):
+        got = inv.get(petscii.to_screen_code(ch))
+        check(got != forbidden,
+              f"{ch!r} folded to {got!r}, which reverses its meaning")
+
+
+def test_stand_ins_are_exactly_one_cell():
+    """A multi-character stand-in would shift every column after it."""
+    import font
+
+    for ch, sub in petscii.SUBSTITUTES.items():
+        check(len(sub) <= 1,
+              f"substitute for {ch!r} is {sub!r}, more than one cell")
+    for alias, target in font.ALIASES.items():
+        check(len(target) == 1, f"alias target {target!r} is not one character")
+
+
 def test_colors_map_to_claude_identity():
     # The logo shade is chosen, not nearest-matched: its real salmon lands on
     # grey, which is indistinguishable from body text on an RGBI monitor.

@@ -102,6 +102,10 @@ python3 tools/vc128.py --connect 127.0.0.1:6400 --interactive
 | `tools/mkbootdisk.py` | build the autobooting D64 |
 | `tools/hwtype.py` | type on the real C128 from the host, for testing |
 | `server/bootstrap.py` | mount the boot disk and reset, idempotently |
+| `server/derive.py` | name-driven character mapping, covers whole blocks |
+| `tools/charaudit.py` | Unicode coverage audit |
+| `tools/eval.py` | every check, one verdict |
+| `tools/hwtype.py` | type on the real C128 from the host |
 
 ## Things that were not obvious
 
@@ -275,6 +279,70 @@ otherwise an alias wins the name and the prompt chevron gets reported as `›`.
 accent. NFD-decomposing and dropping the combining marks handles the whole
 range without a table; the handful that are not base-plus-mark (`ø æ œ ß ł þ`)
 get one-cell substitutes so columns stay aligned.
+
+## Character coverage
+
+The terminal shows whatever Claude Code shows — file contents, source, command
+output — so coverage cannot be argued from the chrome it happens to draw, and
+anything missed reaches the screen as a question mark that is indistinguishable
+from a real one. Three layers handle that.
+
+**Derivation, not enumeration.** `server/derive.py` reads the structure in the
+Unicode *name*. "BOX DRAWINGS HEAVY DOWN AND LEFT" names its own arms, so the
+light-line glyph with the same arms is the answer without anyone listing all 128
+box characters. The same trick covers partial blocks, geometric shapes, arrows,
+Greek, superscripts and most punctuation. Box Drawing went from 27/128 covered
+to 128/128 this way.
+
+**An audit that can fail the build.** `tools/charaudit.py` sweeps the blocks a
+terminal realistically meets and reports how every character renders;
+`--strict` exits non-zero if a must-cover block has a gap, and the same sweep
+is pinned as a test. It reports through `petscii.render_path`, which
+distinguishes a deliberate stand-in from a failure — mapping `¿` to `?` is
+correct and falling through to `?` is a bug, and the screen code is identical
+either way, so the code alone cannot tell them apart.
+
+**Runtime logging for the rest.** No block list covers everything, so the
+renderer records what it could not draw and the bridge logs it with codepoint
+and Unicode name:
+
+```
+WARNING unmapped character U+1F600 GRINNING FACE x1 -> rendered as '?'
+```
+
+Four bugs this found, none of which a spot check would have:
+
+* `┈` rendered as `┴`, because **"QUADRUPLE" contains the substring "UP"**. Arm
+  matching is now on whole words.
+* `≠` rendered as `=`. NFD-decomposing accented letters is right, but the same
+  decomposition drops a combining slash and **inverts the meaning** — worse than
+  any fallback. Folding is now restricted to letters, and every negated relation
+  maps to `#`.
+* `√` rendered as a shaded block, having matched "SQUARE" in "SQUARE ROOT".
+* `±` rendered as `-`, because "MINUS" matched before "PLUS-MINUS".
+
+Verified on the real machine by having Claude Code emit the characters — it
+cannot be typed, since the C128 keyboard has no key for a box-drawing glyph:
+`U+2501`→`─`, `U+2550`→`─`, `U+00B1`→`+`, `U+2260`→`#`, `U+221E`→`8`,
+`U+00E9`→`e`, `U+00B5`→`u`, `U+00B0`→`*`.
+
+## Logging and evals
+
+The bridge logs to stderr and, with `--log-file`, to a file; `--log-level`
+takes the usual names. `tools/eval.py` runs every check and prints one verdict:
+
+```
+check       result  detail
+unit        pass    22/22 passed
+coverage    pass    8 must-cover blocks complete
+render      pass    70 distinct characters, 0 uncovered
+emulator    pass    client rendered the shell prompt, 0 bytes dropped
+hardware    pass    client alive, rx=22459, 0 dropped, 0 overruns
+```
+
+Checks needing the physical machine are **skipped, not passed**, when it is not
+reachable, and the summary lists what went unverified — a skip must never read
+as a pass.
 
 ## Two traps that cost the most time
 

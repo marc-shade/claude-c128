@@ -15,6 +15,8 @@ Example, against the real machine:
 """
 import argparse
 import errno
+import logging
+import unicodedata
 import fcntl
 import os
 import pty
@@ -36,6 +38,30 @@ import protocol                     # noqa: E402
 from vtscreen import VTScreen       # noqa: E402
 
 COLS, ROWS = 80, 25
+
+log = logging.getLogger("claude-c128")
+
+# How often unmapped characters are reported. The renderer records every one it
+# could not draw; without this they would only show up as a question mark on a
+# screen nobody is reading at the time.
+UNMAPPED_INTERVAL = 30.0
+
+
+def setup_logging(path, level):
+    """Log to a file, and to stderr so systemd's journal gets it too."""
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S")
+    root = logging.getLogger("claude-c128")
+    root.setLevel(level)
+    root.handlers.clear()
+    if path:
+        fh = logging.FileHandler(path)
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
+    return root
 
 # Frames are coalesced for this long before being sent. Claude Code repaints
 # far faster than a serial line can carry, and the eye cannot see 30ms anyway.
@@ -236,6 +262,7 @@ class Bridge:
         self.started = time.time()
         self.last_activity = 0.0
         self.last_panel_time = 0.0
+        self.last_unmapped = 0.0
         self.bytes_out = 0
         self.frames_sent = 0
         self.pending_escape = False
@@ -246,6 +273,21 @@ class Bridge:
         # whole rows silently. Waiting for the client's resync request makes the
         # first byte on the wire also the first byte it can receive.
         self.client_ready = False
+
+    def _report_unmapped(self):
+        """Log characters the renderer could not draw, once per batch.
+
+        These are the real coverage gaps: anything the block sweep in
+        tools/charaudit.py does not know about shows up here the first time it
+        appears on screen, with its codepoint and Unicode name so it can be
+        fixed rather than guessed at.
+        """
+        misses = petscii.take_unmapped()
+        if not misses:
+            return
+        for ch, n in sorted(misses.items(), key=lambda kv: -kv[1]):
+            log.warning("unmapped character U+%04X %s x%d -> rendered as '?'",
+                        ord(ch), unicodedata.name(ch, "(unnamed)"), n)
 
     def _take_control(self, data):
         """Split client control bytes out of the key stream.
@@ -284,7 +326,7 @@ class Bridge:
                     enc.glyph(code, bitmap)
                 self.link.queue(enc.take())
                 if self.verbose:
-                    print("[bridge] client is listening", file=sys.stderr)
+                    log.info("client is listening")
             # Deliberately does NOT restore the credit window. The client's
             # receive ring may still hold unread bytes; handing back a full
             # window on top of those is exactly how it overruns. Credit is
@@ -293,7 +335,7 @@ class Bridge:
             self.dirty = True
             self.last_panel = {}
             if self.verbose:
-                print("[bridge] client asked for a resync", file=sys.stderr)
+                log.info("client asked for a resync")
         elif code == protocol.CLIENT_CREDIT:
             self.link.add_credit()
         elif code == protocol.CLIENT_BYE:
@@ -304,8 +346,7 @@ class Bridge:
             # We fell behind; resynchronise from a clean slate.
             self.differ.reset()
             if self.verbose:
-                print("[bridge] link backlog exceeded, forcing full repaint",
-                      file=sys.stderr)
+                log.warning("link backlog exceeded, forcing full repaint")
 
         frame = self.differ.diff(self.vt.grid(), self.vt.cursor())
 
@@ -357,7 +398,7 @@ class Bridge:
             while True:
                 if not self.proc.alive():
                     if self.verbose:
-                        print("[bridge] claude exited", file=sys.stderr)
+                        log.info("claude exited")
                     break
 
                 rlist = [self.proc.fd, self.link]
@@ -397,6 +438,9 @@ class Bridge:
                                   file=sys.stderr, flush=True)
 
                 now = time.time()
+                if now - self.last_unmapped >= UNMAPPED_INTERVAL:
+                    self.last_unmapped = now
+                    self._report_unmapped()
                 if (self.client_ready and self.dirty
                         and now - self.last_frame >= FRAME_INTERVAL):
                     self._send_frame()
@@ -414,7 +458,7 @@ class Bridge:
                 if self.link in w or self.link.wants_write():
                     self.link.flush()
         except ConnectionError as exc:
-            print(f"[bridge] {exc}", file=sys.stderr)
+            log.warning("link: %s", exc)
             clean = False
         except KeyboardInterrupt:
             pass
@@ -428,8 +472,7 @@ class Bridge:
                 pass
             self.proc.close()
             self.link.close()
-            print(f"[bridge] {self.frames_sent} frames, {self.bytes_out} bytes sent",
-                  file=sys.stderr)
+            log.info("session end: %d frames, %d bytes", self.frames_sent, self.bytes_out)
         return clean
 
 
@@ -438,7 +481,7 @@ def open_transport(args):
         host, _, port = args.connect.rpartition(":")
         sock = socket.create_connection((host, int(port)), timeout=15)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        print(f"[bridge] connected to {args.connect}", file=sys.stderr)
+        log.info("connected to %s", args.connect)
         return sock
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -468,8 +511,14 @@ def main():
     p.add_argument("--rate", type=int, default=3840,
                    help="link speed in bytes/sec (38400 baud 8N1 = 3840)")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--log-file", default=None,
+                   help="write the session log here as well as to stderr")
+    p.add_argument("--log-level", default="INFO",
+                   choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args()
 
+    setup_logging(args.log_file,
+                  "DEBUG" if args.verbose else args.log_level)
     sock = open_transport(args)
     bridge = Bridge(SerialLink(sock, byte_rate=args.rate), shlex.split(args.command),
                     cwd=args.cwd, panel=not args.no_panel, verbose=args.verbose)
