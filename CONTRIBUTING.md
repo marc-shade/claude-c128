@@ -36,6 +36,22 @@ If you do have hardware, `tools/vdcpeek.py` reads the real 80-column screen back
 over the network, and `tools/hwtype.py` types into it. Those two make hardware
 debugging tractable; without them you are guessing.
 
+## CI does not run everything
+
+The hosted CI runs the host tests, the Unicode coverage sweep, the render check,
+the 6502 build and a boot-sector sanity check. It **cannot** run two things:
+
+- **Glyph verification against the character ROM.** Debian and Ubuntu ship VICE
+  without the Commodore ROMs for licensing reasons, so the test reports
+  `SKIPPED (not verified)` there rather than passing. It runs locally wherever
+  VICE has ROMs.
+- **The emulator end-to-end job**, for the same reason: `x128` cannot boot
+  without ROMs. It is wired to `workflow_dispatch` so a self-hosted runner with
+  ROMs can trigger it, and it runs locally with `make emu`.
+
+So a green CI badge does not mean the 6502 client was exercised. Run `make emu`
+before submitting anything that touches the client or the protocol.
+
 ## Before opening a PR
 
 ```sh

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   host:
@@ -16,25 +17,30 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: install pyte
-        run: pip install pyte
-
-      # VICE ships the C128 character ROM, which the glyph table is verified
-      # against, plus c1541 and petcat. cc65 builds the 6502 client.
-      - name: install VICE and cc65
+      - name: install dependencies
         run: |
+          pip install -r requirements.txt
           sudo apt-get update
-          sudo apt-get install -y vice cc65
+          sudo apt-get install -y cc65 vice
 
-      - name: locate the character ROM
+      # Debian and Ubuntu ship VICE without the Commodore ROMs for licensing
+      # reasons, so the glyph table cannot be verified against the character ROM
+      # on these runners. The test reports that as SKIPPED rather than passing,
+      # and this step says so in the log so the gap is visible.
+      - name: character ROM availability
         run: |
-          python3 -c "
-          import sys; sys.path.insert(0, 'server')
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "server")
           import petscii
-          print('ROM:', petscii.ROM_PATH)
-          ok, errs = petscii.verify_against_rom()
-          print('verified' if ok else errs)
-          sys.exit(0 if ok else 1)"
+          if petscii.ROM_PATH:
+              ok, errs = petscii.verify_against_rom()
+              print("ROM:", petscii.ROM_PATH)
+              print("glyph table verified" if ok else f"MISMATCH: {errs}")
+              sys.exit(0 if ok else 1)
+          print("no C128 character ROM on this runner; glyph verification will "
+                "be reported as SKIPPED, not passed")
+          PY
 
       - name: unit tests
         run: make test
@@ -42,16 +48,47 @@ jobs:
       - name: Unicode coverage
         run: make coverage
 
-      - name: build the 6502 client
-        run: make disk
-
       - name: render a sample session
         run: |
           python3 tools/charaudit.py \
             --capture tests/fixtures/render_sample.raw --strict
 
+      - name: build the 6502 client and boot disk
+        run: make disk
+
+      - name: boot sector is well formed
+        run: |
+          python3 - <<'PY'
+          # The two bugs that once hung the machine on every power-on were both
+          # in this sector: a branch that landed mid-instruction, and an rts
+          # placed after the data so execution fell through the string.
+          d = open("client/build/claude-boot.d64", "rb").read()[:64]
+          assert d[:3] == b"CBM", "missing boot signature"
+          end = d.index(b"\x00", 7) + 2
+          code, base = d[end:], 0x0B00 + end
+          i, saw_rts, target = 0, False, None
+          lens = {0xA2: 2, 0xBD: 3, 0x9D: 3, 0xCA: 1, 0x10: 2, 0xA9: 2,
+                  0x85: 2, 0x60: 1}
+          while i < 24 and code[i] in lens:
+              op = code[i]
+              if op == 0x10:
+                  target = base + i + 2 + ((code[i + 1] ^ 0x80) - 0x80)
+              if op == 0x60:
+                  saw_rts = True
+                  break
+              i += lens[op]
+          assert target == base + 2, f"branch targets {target:#06x}, not the loop"
+          assert saw_rts, "no rts before the data: execution would run the string"
+          print("boot sector OK: branch and rts both correct")
+          PY
+
   emulator:
     name: 6502 client end to end in VICE
+    # Needs the Commodore ROMs to boot x128, which the runner's VICE package does
+    # not include, so this cannot run on a hosted runner. Kept here because it is
+    # the real end-to-end gate and runs locally with `make emu`; trigger it on a
+    # self-hosted runner that has ROMs.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,18 +97,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: install pyte
-        run: pip install pyte
-
-      - name: install VICE, cc65 and Xvfb
+      - name: install dependencies
         run: |
+          pip install -r requirements.txt
           sudo apt-get update
-          sudo apt-get install -y vice cc65 xvfb
+          sudo apt-get install -y cc65 vice xvfb
 
-      - name: build the client and boot disk
-        run: make disk
-
-      # Boots the real client binary in VICE with the ACIA wired to the bridge,
-      # then reads the emulated VDC back through VICE's monitor.
       - name: end to end
         run: make emu

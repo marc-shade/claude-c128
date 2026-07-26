@@ -63,8 +63,24 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 
+class Skipped(Exception):
+    """Raised when a check cannot run here - never counted as a pass."""
+
+
+def skip(reason):
+    raise Skipped(reason)
+
+
 # --------------------------------------------------------------------------
 def test_rom_verification():
+    """The glyph table must match the real C128 character ROM.
+
+    Skipped, loudly, where the ROM is absent - Debian and Ubuntu ship VICE
+    without the Commodore ROMs for licensing reasons, so CI on those runners
+    cannot do this check. A skip is not a pass and says so.
+    """
+    if not petscii.ROM_PATH:
+        skip("no C128 character ROM; install VICE with ROMs or set CBM_CHARGEN")
     ok, errors = petscii.verify_against_rom()
     check(ok, "glyph table disagrees with the character ROM: " + "; ".join(errors))
 
@@ -156,8 +172,7 @@ def test_real_claude_capture_renders():
     if not os.path.exists(cap):
         cap = os.path.join(root, "docs", "claude_clean.raw")
     if not os.path.exists(cap):
-        print("  (skipped: no render fixture)")
-        return
+        skip("no render fixture")
     raw = open(cap, "rb").read()
     vt = VTScreen(80, 25)
     vt.feed(raw)
@@ -441,18 +456,30 @@ def test_run_length_chunking():
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
-    failed = 0
+    failed, skipped = [], []
     for name, fn in tests:
         try:
             fn()
             print(f"  PASS  {name}")
+        except Skipped as exc:
+            skipped.append((name, str(exc)))
+            print(f"  SKIP  {name}: {exc}")
         except AssertionError as exc:
-            failed += 1
+            failed.append(name)
             print(f"  FAIL  {name}: {exc}")
         except Exception as exc:                      # noqa: BLE001
-            failed += 1
+            failed.append(name)
             print(f"  ERROR {name}: {type(exc).__name__}: {exc}")
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
+
+    passed = len(tests) - len(failed) - len(skipped)
+    line = f"\n{passed}/{len(tests)} passed"
+    if skipped:
+        line += f", {len(skipped)} SKIPPED (not verified)"
+    if failed:
+        line += f", {len(failed)} failed"
+    print(line)
+    for name, why in skipped:
+        print(f"  not verified: {name} - {why}")
     return 1 if failed else 0
 
 
