@@ -258,7 +258,12 @@ def panel_lines(title, busy, tick, uptime, frames, kbytes, drops):
 
 class Bridge:
     def __init__(self, link, argv, cwd=None, panel=True, verbose=False,
-                 cols=COLS, rows=ROWS):
+                 cols=COLS, rows=ROWS, machine="c128"):
+        # The two machines have different palettes, so the colour tables have to
+        # be selected before the first frame is rendered. Same index, different
+        # colour: VDC 12 is a brown, VIC-II 12 is a medium grey.
+        self.palette = petscii.use_machine(machine)
+        self.machine = machine
         self.link = link
         self.cols = cols
         self.rows = rows
@@ -537,7 +542,8 @@ def main():
                     cwd=args.cwd,
                     panel=machine["panel"] and not args.no_panel,
                     verbose=args.verbose,
-                    cols=machine["cols"], rows=machine["rows"])
+                    cols=machine["cols"], rows=machine["rows"],
+                    machine=args.machine)
     # 0 for claude exiting on its own (nothing left to serve, do not respawn);
     # 1 for a link failure, so a supervisor like systemd knows to restart and
     # let the C128 dial back in.

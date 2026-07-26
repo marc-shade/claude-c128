@@ -289,6 +289,22 @@ def to_screen_code(ch: str) -> int:
 # ---------------------------------------------------------------------------
 # Color. The VDC attribute nibble is intensity-red-green-blue.
 # ---------------------------------------------------------------------------
+
+BLACK, WHITE, LIGHT_GREY, DARK_GREY = 0, 15, 14, 1
+
+# ---------------------------------------------------------------------------
+# Palettes
+#
+# The two machines do not share one. The C128's VDC is RGBI - sixteen fixed
+# combinations of red/green/blue at two intensities - while the C64's VIC-II has
+# its own analogue set with oranges and browns the VDC simply cannot make. The
+# same index means different colours on each, so a colour chosen for one is
+# wrong on the other: VDC 12 is a brown, VIC-II 12 is a medium grey.
+#
+# Both tables are VICE's own, not recalled: /usr/share/vice/C128/vdc_deft.vpl
+# and /usr/share/vice/C64/colodore.vpl.
+# ---------------------------------------------------------------------------
+
 VDC_PALETTE = [
     (0x00, 0x00, 0x00),   # 0  black
     (0x55, 0x55, 0x55),   # 1  dark grey
@@ -308,62 +324,138 @@ VDC_PALETTE = [
     (0xFF, 0xFF, 0xFF),   # 15 white
 ]
 
-BLACK, WHITE, LIGHT_GREY, DARK_GREY = 0, 15, 14, 1
-
-# The colour the Claude Code logo is drawn in. Its real shade is a salmon that
-# nearest-match sends to grey, indistinguishable from body text, so it is
-# chosen deliberately rather than derived. Any VDC index works:
-#   0 black  1 dk grey  2 blue   3 lt blue  4 green   5 lt green  6 cyan
-#   7 lt cyan 8 red     9 lt red 10 purple 11 lt purple 12 brown 13 yellow
-#   14 lt grey 15 white
-LOGO_COLOR = 11           # light purple - reads as pink on RGBI
-
-# Claude Code's palette, pinned by hand so its identity colors land on the
-# right VDC entries instead of drifting to whatever nearest-RGB picks.
-EXACT = {
-    (0xD7, 0x87, 0x87): LOGO_COLOR,   # logo, as actually emitted
-    (0xD7, 0x77, 0x57): LOGO_COLOR,   # logo, older shade
-    (0xCC, 0x78, 0x5C): LOGO_COLOR,   # logo, banner variant
-    (0xFF, 0xC1, 0x07): 13,   # amber warning             -> yellow
-    (0x99, 0x99, 0x99): 14,   # dim text                  -> light grey
-    (0x88, 0x88, 0x88): 1,    # rules and borders         -> dark grey
-    (0xB1, 0xB9, 0xF9): 3,    # lavender prompt           -> light blue
-    (0x00, 0x00, 0x00): 0,
-    (0xFF, 0xFF, 0xFF): 15,
-}
-
-# xterm 256-color cube, needed because Claude Code mixes 38;5;N with truecolor.
-_STEPS = (0, 95, 135, 175, 215, 255)
-_ANSI16 = [
-    (0, 0, 0), (170, 0, 0), (0, 170, 0), (170, 85, 0),
-    (0, 0, 170), (170, 0, 170), (0, 170, 170), (170, 170, 170),
-    (85, 85, 85), (255, 85, 85), (85, 255, 85), (255, 255, 85),
-    (85, 85, 255), (255, 85, 255), (85, 255, 255), (255, 255, 255),
+VICII_PALETTE = [
+    (0x00, 0x00, 0x00),   # 0  black
+    (0xFF, 0xFF, 0xFF),   # 1  white
+    (0x96, 0x28, 0x2E),   # 2  red
+    (0x5B, 0xD6, 0xCE),   # 3  cyan
+    (0x9F, 0x2D, 0xAD),   # 4  purple
+    (0x41, 0xB9, 0x36),   # 5  green
+    (0x27, 0x24, 0xC4),   # 6  blue
+    (0xEF, 0xF3, 0x47),   # 7  yellow
+    (0x9F, 0x48, 0x15),   # 8  orange
+    (0x5E, 0x35, 0x00),   # 9  brown
+    (0xDA, 0x5F, 0x66),   # 10 light red
+    (0x47, 0x47, 0x47),   # 11 dark grey
+    (0x78, 0x78, 0x78),   # 12 grey
+    (0x91, 0xFF, 0x84),   # 13 light green
+    (0x68, 0x64, 0xFF),   # 14 light blue
+    (0xAE, 0xAE, 0xAE),   # 15 light grey
 ]
 
-
-def xterm256_to_rgb(n: int):
-    if n < 16:
-        return _ANSI16[n]
-    if n < 232:
-        n -= 16
-        return (_STEPS[n // 36 % 6], _STEPS[n // 6 % 6], _STEPS[n % 6])
-    v = 8 + (n - 232) * 10
-    return (v, v, v)
+# The colour the Claude Code logo is drawn in. Its real shade is a salmon, and
+# nearest-match sends it either to grey - indistinguishable from body text - or
+# to a light red that reads as pink, so it is chosen deliberately on both
+# machines rather than derived. Both entries are the orange/brown their palette
+# actually has: the VDC's dark yellow at $AA5500, and the VIC-II's true orange.
+LOGO_COLOR_VDC   = 12     # brown / dark yellow
+LOGO_COLOR_VICII = 8      # orange
 
 
-def rgb_to_vdc(r: int, g: int, b: int) -> int:
-    """Nearest VDC color, with Claude Code's identity colors pinned."""
-    hit = EXACT.get((r, g, b))
-    if hit is not None:
-        return hit
-    best, best_d = WHITE, None
-    for idx, (pr, pg, pb) in enumerate(VDC_PALETTE):
-        # Weighted for perceived luminance so greys don't collapse to blue.
-        d = 2 * (r - pr) ** 2 + 4 * (g - pg) ** 2 + 3 * (b - pb) ** 2
-        if best_d is None or d < best_d:
-            best, best_d = idx, d
-    return best
+def _pins(logo, yellow, light_grey, dark_grey, light_blue, white):
+    """Claude Code's identity colours, pinned so they land where they should
+    instead of drifting to whatever nearest-RGB picks. Indices differ per
+    machine, so the mapping is expressed by name and resolved per palette."""
+    return {
+        (0xD7, 0x87, 0x87): logo,        # logo, as actually emitted
+        (0xD7, 0x77, 0x57): logo,        # logo, older shade
+        (0xCC, 0x78, 0x5C): logo,        # logo, banner variant
+        (0xFF, 0xC1, 0x07): yellow,      # amber warning     -> yellow
+        (0x99, 0x99, 0x99): light_grey,  # dim text          -> light grey
+        (0x88, 0x88, 0x88): dark_grey,   # rules and borders -> dark grey
+        (0xB1, 0xB9, 0xF9): light_blue,  # lavender prompt   -> light blue
+        (0x00, 0x00, 0x00): 0,
+        (0xFF, 0xFF, 0xFF): white,
+    }
+
+
+class Palette:
+    """One machine's sixteen colours, plus where Claude Code's own shades go."""
+
+    def __init__(self, name, table, pins, names, logo, white, light_grey,
+                 dark_grey):
+        self.name = name
+        self.table = table
+        self.pins = pins
+        self.names = names
+        self.logo = logo
+        self.white = white
+        self.light_grey = light_grey
+        self.dark_grey = dark_grey
+
+    def index(self, r: int, g: int, b: int) -> int:
+        """Nearest colour in this palette, with the pinned shades honoured."""
+        hit = self.pins.get((r, g, b))
+        if hit is not None:
+            return hit
+        best, best_d = self.white, None
+        for idx, (pr, pg, pb) in enumerate(self.table):
+            # Weighted for perceived luminance so greys don't collapse to blue.
+            d = 2 * (r - pr) ** 2 + 4 * (g - pg) ** 2 + 3 * (b - pb) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = idx, d
+        return best
+
+
+# pyte reports the sixteen ANSI colours by name. Mapping them is per-palette
+# too: "red" is index 8 on the VDC and 2 on the VIC-II.
+VDC_NAMES = {
+    "black": 0, "red": 8, "green": 4, "brown": 12, "blue": 2,
+    "magenta": 10, "cyan": 6, "white": 14,
+    "brightblack": 1, "brightred": 9, "brightgreen": 5,
+    "brightbrown": 13, "brightyellow": 13, "brightblue": 3,
+    "brightmagenta": 11, "brightcyan": 7, "brightwhite": 15,
+}
+
+# The VIC-II has no light purple and only one cyan, so brightmagenta and
+# brightcyan fold onto their dim forms rather than being faked with a colour
+# from somewhere else in the wheel.
+VICII_NAMES = {
+    "black": 0, "red": 2, "green": 5, "brown": 9, "blue": 6,
+    "magenta": 4, "cyan": 3, "white": 15,
+    "brightblack": 11, "brightred": 10, "brightgreen": 13,
+    "brightbrown": 7, "brightyellow": 7, "brightblue": 14,
+    "brightmagenta": 4, "brightcyan": 3, "brightwhite": 1,
+}
+
+VDC = Palette(
+    "c128", VDC_PALETTE,
+    _pins(logo=LOGO_COLOR_VDC, yellow=13, light_grey=14, dark_grey=1,
+          light_blue=3, white=15),
+    VDC_NAMES,
+    logo=LOGO_COLOR_VDC, white=15, light_grey=14, dark_grey=1)
+
+VICII = Palette(
+    "c64", VICII_PALETTE,
+    _pins(logo=LOGO_COLOR_VICII, yellow=7, light_grey=15, dark_grey=11,
+          light_blue=14, white=1),
+    VICII_NAMES,
+    logo=LOGO_COLOR_VICII, white=1, light_grey=15, dark_grey=11)
+
+PALETTES = {"c128": VDC, "c64": VICII}
+
+# The active palette. One bridge process drives one machine, so this is set once
+# at startup rather than threaded through every cell lookup.
+ACTIVE = VDC
+LOGO_COLOR = ACTIVE.logo
+
+
+def use_machine(name: str) -> "Palette":
+    """Select the palette for the machine being driven. Returns it."""
+    global ACTIVE, LOGO_COLOR
+    ACTIVE = PALETTES[name]
+    LOGO_COLOR = ACTIVE.logo
+    return ACTIVE
+
+
+def rgb_to_index(r: int, g: int, b: int, palette: "Palette" = None) -> int:
+    """Nearest colour in the active machine's palette, pinned shades honoured."""
+    return (palette or ACTIVE).index(r, g, b)
+
+
+# The original name, from when there was only the VDC. Kept so nothing that
+# imports it breaks; it follows whichever palette is active.
+rgb_to_vdc = rgb_to_index
 
 
 def parse_color(spec, default: int) -> int:
@@ -373,15 +465,9 @@ def parse_color(spec, default: int) -> int:
     if isinstance(spec, str) and len(spec) == 6 and all(
         c in "0123456789abcdefABCDEF" for c in spec
     ):
-        return rgb_to_vdc(int(spec[0:2], 16), int(spec[2:4], 16),
-                          int(spec[4:6], 16))
-    return {
-        "black": 0, "red": 8, "green": 4, "brown": 12, "blue": 2,
-        "magenta": 10, "cyan": 6, "white": 14,
-        "brightblack": 1, "brightred": 9, "brightgreen": 5,
-        "brightbrown": 13, "brightyellow": 13, "brightblue": 3,
-        "brightmagenta": 11, "brightcyan": 7, "brightwhite": 15,
-    }.get(spec, default)
+        return ACTIVE.index(int(spec[0:2], 16), int(spec[2:4], 16),
+                            int(spec[4:6], 16))
+    return ACTIVE.names.get(spec, default)
 
 
 BRIGHTEN = {0: 1, 1: 14, 2: 3, 4: 5, 6: 7, 8: 9, 10: 11, 12: 13, 14: 15}

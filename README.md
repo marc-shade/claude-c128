@@ -184,6 +184,13 @@ lays *itself* out for the narrower screen rather than having 80 columns cropped.
 It also stops the bridge sending panel lines, which on a C64 would be drawn over
 the terminal — there is only one screen.
 
+The palettes are not the same, and the client does not pretend otherwise. The
+VDC is RGBI — sixteen fixed combinations at two intensities — while the VIC-II
+has its own analogue set. The same index means different colours on each, so the
+bridge selects a palette per machine; both tables come from VICE's own
+`vdc_deft.vpl` and `colodore.vpl`. The Claude logo is drawn in the orange each
+palette actually has: `$AA5500` on the VDC, the VIC-II's true orange on a C64.
+
 Three things the VIC-II cannot do that the VDC can, all visible:
 
 - **No underline and no blink.** Colour RAM holds four bits of colour and

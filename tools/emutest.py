@@ -165,6 +165,9 @@ def main():
                    help="attach this d64 to drive 8 and let the C128 autoboot "
                         "it, instead of autostarting the .prg directly")
     p.add_argument("--keep", action="store_true", help="leave VICE running")
+    p.add_argument("--colours", action="store_true",
+                   help="also read the colour plane and report which indices "
+                        "are actually on screen")
     p.add_argument("--machine", choices=("c128", "c64"), default="c128",
                    help="c128 runs x128 and reads the 80-column VDC; c64 runs "
                         "x64sc and reads the VIC-II screen at $0400")
@@ -245,6 +248,23 @@ def main():
             mem = mon.read(0x0000, cols * rows - 1, bank=banks["vdc"])
         mon.resume()
         print(render(mem, cols))
+
+        if args.colours:
+            # Read the colour plane the same way the machine does: the VDC keeps
+            # attributes in its own RAM at $0800, the VIC-II in colour RAM at
+            # $D800. Only the low nibble is colour on either.
+            if args.machine == "c64":
+                attr = mon.read(0xD800, 0xD800 + cols * rows - 1)
+            else:
+                attr = mon.read(0x0800, 0x0800 + cols * rows - 1, bank=banks["vdc"])
+            mon.resume()
+            hist = {}
+            for cell, a in zip(mem, attr):
+                if cell not in (0x20, 0x00):        # ignore blank cells
+                    hist[a & 0x0F] = hist.get(a & 0x0F, 0) + 1
+            print("\ncolours in use (index: cells with visible text):")
+            for idx in sorted(hist, key=lambda k: -hist[k]):
+                print(f"  {idx:2d}  {hist[idx]:5d}")
 
         # Client-side link diagnostics, read straight out of emulated RAM.
         syms = load_labels(lbl)

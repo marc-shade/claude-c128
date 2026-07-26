@@ -426,21 +426,99 @@ def test_stand_ins_are_exactly_one_cell():
 
 
 def test_colors_map_to_claude_identity():
-    # The logo shade is chosen, not nearest-matched: its real salmon lands on
-    # grey, which is indistinguishable from body text on an RGBI monitor.
-    check(petscii.rgb_to_vdc(0xD7, 0x87, 0x87) == petscii.LOGO_COLOR,
-          "logo colour not pinned")
-    check(petscii.rgb_to_vdc(0xD7, 0x77, 0x57) == petscii.LOGO_COLOR,
-          "older logo shade not pinned")
-    # Grey is the one thing it must not be: that is the body-text colour, and
-    # the logo would vanish into the surrounding box.
-    check(petscii.LOGO_COLOR not in (14, 1),
-          "logo colour must not be grey - it would not stand out")
-    check(petscii.rgb_to_vdc(0xFF, 0xC1, 0x07) == 13, "amber warning mismapped")
-    check(petscii.rgb_to_vdc(0x00, 0x00, 0x00) == 0, "black mismapped")
-    check(petscii.rgb_to_vdc(0xFF, 0xFF, 0xFF) == 15, "white mismapped")
-    check(petscii.parse_color("999999", 0) == 14, "dim grey mismapped")
-    check(petscii.parse_color("default", 7) == 7, "default colour not honoured")
+    # Both machines, because they do not share a palette and a colour chosen for
+    # one is wrong on the other.
+    try:
+        for machine, yellow, white, dim in (("c128", 13, 15, 14),
+                                            ("c64", 7, 1, 15)):
+            pal = petscii.use_machine(machine)
+            # The logo shade is chosen, not nearest-matched: its real salmon
+            # lands on grey, which is indistinguishable from body text.
+            check(petscii.rgb_to_index(0xD7, 0x87, 0x87) == pal.logo,
+                  f"{machine}: logo colour not pinned")
+            check(petscii.rgb_to_index(0xD7, 0x77, 0x57) == pal.logo,
+                  f"{machine}: older logo shade not pinned")
+            # Grey is the one thing it must not be: that is the body-text
+            # colour, and the logo would vanish into the surrounding box.
+            check(pal.logo not in (pal.light_grey, pal.dark_grey),
+                  f"{machine}: logo colour must not be grey")
+            check(petscii.rgb_to_index(0xFF, 0xC1, 0x07) == yellow,
+                  f"{machine}: amber warning mismapped")
+            check(petscii.rgb_to_index(0x00, 0x00, 0x00) == 0,
+                  f"{machine}: black mismapped")
+            check(petscii.rgb_to_index(0xFF, 0xFF, 0xFF) == white,
+                  f"{machine}: white mismapped")
+            check(petscii.parse_color("999999", 0) == dim,
+                  f"{machine}: dim grey mismapped")
+            check(petscii.parse_color("default", 7) == 7,
+                  f"{machine}: default colour not honoured")
+    finally:
+        petscii.use_machine("c128")
+
+
+def test_logo_is_the_orange_in_each_palette():
+    """The logo must be the orange/brown its own palette actually has.
+
+    Asserted against the RGB the palette entry holds, not against an index:
+    an index alone would still pass if the two machines' tables were swapped,
+    which is exactly the mistake this guards against.
+    """
+    try:
+        for machine in ("c128", "c64"):
+            pal = petscii.use_machine(machine)
+            r, g, b = pal.table[pal.logo]
+            check(r > b and g > b, f"{machine}: logo colour is not warm "
+                                   f"(#{r:02X}{g:02X}{b:02X})")
+            check(r > g, f"{machine}: logo colour is not red-dominant "
+                         f"(#{r:02X}{g:02X}{b:02X})")
+            # A salmon or pink has a high blue component; an orange does not.
+            check(b <= 0x40, f"{machine}: logo colour reads as pink, not orange "
+                             f"(#{r:02X}{g:02X}{b:02X})")
+    finally:
+        petscii.use_machine("c128")
+
+
+def test_render_kind_is_not_shadowed_by_the_colour_table():
+    """EXACT is the render-path kind, and must stay a string.
+
+    The colour pin table was once also called EXACT at module level, which
+    silently rebound this constant to a dict. Nothing compared against it, so it
+    never bit - but the next person to write `kind == petscii.EXACT` would have
+    got a very confusing afternoon.
+    """
+    check(petscii.EXACT == "exact", "EXACT is no longer the render-path kind")
+    kind, _, _ = petscii.render_path("A")
+    check(kind == petscii.EXACT, "render_path did not report an exact match")
+    check(isinstance(kind, str), f"render kind should be a string, got {type(kind).__name__}")
+    # Switching machines must not disturb it.
+    try:
+        petscii.use_machine("c64")
+        check(petscii.EXACT == "exact", "use_machine clobbered the render kind")
+    finally:
+        petscii.use_machine("c128")
+
+
+def test_palettes_are_not_interchangeable():
+    """The C64 must not be driven with VDC indices.
+
+    Both machines take a colour index over the same wire, so nothing downstream
+    can catch a palette mix-up - the screen just comes out the wrong colour. The
+    tables genuinely differ, and this pins that they are being kept apart.
+    """
+    check(petscii.VDC.table != petscii.VICII.table,
+          "the two palettes are identical - one of them is wrong")
+    # Index 12 is the case that bites: a brown on the VDC, a grey on the VIC-II.
+    check(petscii.VDC.table[12] != petscii.VICII.table[12],
+          "index 12 should differ between the machines")
+    check(petscii.VDC.names["red"] != petscii.VICII.names["red"],
+          "named colours should differ between the machines")
+    try:
+        check(petscii.use_machine("c64").name == "c64", "use_machine ignored")
+        check(petscii.ACTIVE is petscii.VICII, "active palette not switched")
+        check(petscii.use_machine("c128").name == "c128", "use_machine ignored")
+        check(petscii.ACTIVE is petscii.VDC, "active palette not restored")
+    finally:
+        petscii.use_machine("c128")
 
 
 def test_run_length_chunking():
