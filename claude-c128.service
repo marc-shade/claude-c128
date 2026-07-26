@@ -1,0 +1,16 @@
+[Unit]
+Description=claude-c128 bridge (Claude Code terminal for the real C128)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/claude-c128
+ExecStart=/usr/bin/python3 %h/code/claude-c128/server/bridge.py --connect 192.168.1.237:3000 --command claude --cwd %h -v
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/code/claude-c128/bridge.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

@@ -349,6 +349,10 @@ class Bridge:
         return enc.take() if changed else b""
 
     def run(self):
+        """Returns True for a clean exit (claude quit on its own), False for a
+        link failure. Distinct so a supervisor (systemd) can restart on a
+        dropped link without respawning claude every time a session ends."""
+        clean = True
         try:
             while True:
                 if not self.proc.alive():
@@ -411,6 +415,7 @@ class Bridge:
                     self.link.flush()
         except ConnectionError as exc:
             print(f"[bridge] {exc}", file=sys.stderr)
+            clean = False
         except KeyboardInterrupt:
             pass
         finally:
@@ -425,6 +430,7 @@ class Bridge:
             self.link.close()
             print(f"[bridge] {self.frames_sent} frames, {self.bytes_out} bytes sent",
                   file=sys.stderr)
+        return clean
 
 
 def open_transport(args):
@@ -467,8 +473,10 @@ def main():
     sock = open_transport(args)
     bridge = Bridge(SerialLink(sock, byte_rate=args.rate), shlex.split(args.command),
                     cwd=args.cwd, panel=not args.no_panel, verbose=args.verbose)
-    bridge.run()
-    return 0
+    # 0 for claude exiting on its own (nothing left to serve, do not respawn);
+    # 1 for a link failure, so a supervisor like systemd knows to restart and
+    # let the C128 dial back in.
+    return 0 if bridge.run() else 1
 
 
 if __name__ == "__main__":

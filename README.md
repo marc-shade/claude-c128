@@ -44,6 +44,14 @@ Against the real machine (the bridge dials the Ultimate's modem listener):
 ./run.sh [working-directory]            # build, load the client, dial in
 ```
 
+As a `systemd --user` service, so it survives reboots and reconnects on its own
+if the link drops (`claude-c128.service`, install with `systemctl --user
+enable --now`). The bridge exits 0 when Claude Code quits on its own — nothing
+is left to serve, so the service stays down — and exits 1 on a link failure, so
+`Restart=on-failure` respawns it and the C128 dials back in. Verified: a clean
+`true` command exits 0, an abrupt socket close while the session is still
+running exits 1.
+
 or by hand:
 
 ```sh
