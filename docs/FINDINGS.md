@@ -34,10 +34,17 @@ and protocol opcodes are `$01-$09`, so the two streams cannot collide: every
 byte goes to both the modem watcher and the protocol decoder, and each ignores
 the other's traffic.
 
-**Dial-out is blocked here, not broken.** `ATD<host>:<port>` would let the C128
-initiate, but `192.168.1.237` is not in this node's firewalld trusted zone, so
-the inbound connection never lands. The bridge dialling the Ultimate avoids
-needing a firewall change.
+**Dial-out needs a Hayes modifier letter.** `ATDT<host>:<port>`, not `ATD`. The
+firmware's parser (`software/io/acia/modem.cc:602`) copies the dial string
+starting at `i+2`, so it always discards one character after the `D` — the slot
+Hayes reserves for T (tone) or P (pulse). Plain `ATD192.168.1.238` dials
+`92.168.1.238`.
+
+An earlier version of this document claimed dial-out failed only because the
+host was missing from a firewall's trusted zone. That test used bare `ATD` and
+was malformed, so the conclusion was unsound; the firewall may or may not also
+matter. The bridge dialling *in* to the Ultimate avoids the question entirely,
+which is what it does.
 
 ## Status
 
