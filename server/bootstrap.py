@@ -25,6 +25,15 @@ HOST = "192.168.1.237"
 VIC_SCREEN = 0x0400
 BOOT_IMAGE = "/Usb0/claude-boot.d64"
 
+# The Ultimate must expose the 6551 at $DE00 on NMI or the client has nothing to
+# talk to. This setting has been observed reverting to "Off" across a device
+# reboot even after save_to_flash, and the symptom is opaque — the modem
+# listener answers with "Modem Software is currently not running..." — so it is
+# re-asserted here and saved on every cold bring-up.
+ACIA_CATEGORY = "Modem%20Settings"
+ACIA_ITEM = "ACIA%20(6551)%20Mode"
+ACIA_VALUE = "DE00%2FNMI"
+
 # The client prints its name on the 40-column screen at startup, and the
 # companion panel keeps the word there afterwards, so this marker is present
 # for the whole life of a session either way. In screen codes, c=$03 l=$0C
@@ -69,6 +78,12 @@ def main():
         return 0
 
     try:
+        _, cur = req(host, "GET", f"/v1/configs/{ACIA_CATEGORY}/{ACIA_ITEM}")
+        if b"DE00/NMI" not in cur:
+            print("[bootstrap] ACIA mode is not DE00/NMI, setting it")
+            req(host, "PUT",
+                f"/v1/configs/{ACIA_CATEGORY}/{ACIA_ITEM}?value={ACIA_VALUE}")
+            req(host, "PUT", "/v1/configs:save_to_flash")
         print(f"[bootstrap] mounting {args.image} on drive {args.drive}")
         req(host, "PUT", f"/v1/drives/{args.drive}:mount"
                          f"?image={args.image}&type=d64&mode=readonly")

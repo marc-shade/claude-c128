@@ -10,6 +10,8 @@ is readable. That set keeps the box-drawing and block glyphs at $40, $5B-$5D,
 $6B-$73, $7B-$7F and $A0+, and gives up only codes $41-$5A, which become A-Z.
 """
 
+import unicodedata
+
 import font
 
 ROM_PATH = "/usr/share/vice/C128/chargen-390059-01.bin"
@@ -98,6 +100,11 @@ SUBSTITUTES = {
     "✗": "x",    # ✗
     "→": ">",    # →
     "←": "<",    # ←
+    # Latin letters that are not a base plus a combining mark, so NFD cannot
+    # fold them. One cell each, to keep column alignment.
+    "ø": "o", "Ø": "O", "æ": "a", "Æ": "A", "œ": "o", "Œ": "O",
+    "ß": "s", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+    "þ": "t", "Þ": "T", "ð": "d", "Ð": "D", "ı": "i", "ŋ": "n",
     "↳": ">",    # ↳
     "": " ", "": "|",   # powerline separators
 }
@@ -156,7 +163,17 @@ def to_screen_code(ch: str) -> int:
         return 0x40
     if o < 0x20:
         return 0x20                                 # control chars -> space
-    return 0x3F                                     # unknown -> '?'
+
+    # Accented Latin letters fold to their base letter. Claude Code reaches for
+    # words like "Sautéed" and "Café", and a '?' in the middle of one reads as
+    # corruption rather than as a missing accent. Decomposing and dropping the
+    # combining marks handles the whole range without a lookup table.
+    folded = "".join(c for c in unicodedata.normalize("NFD", ch)
+                     if not unicodedata.combining(c))
+    if folded and folded[0] != ch:
+        return to_screen_code(folded[0])
+
+    return 0x3F                                     # genuinely unknown -> '?'
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +293,13 @@ def inverse_map():
     viewer that showed them as '?' would misreport a screen that is correct.
     """
     inv = {}
+    # The glyph a slot was drawn for wins its label. Aliases share slots, so
+    # without this an alias could name the slot and a viewer would report the
+    # prompt chevron as a single guillemet.
+    for ch in font.GLYPH_ART:
+        inv[font.CODES[ch]] = ch
     for ch, code in font.CODES.items():
-        inv[code] = ch
+        inv.setdefault(code, ch)
     for ch, code in GLYPHS.items():
         inv.setdefault(code, ch)
     for c in range(0x20, 0x40):

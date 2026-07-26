@@ -259,6 +259,75 @@ def test_ascii_that_charset2_breaks_has_a_glyph():
               f"{ch!r} maps to ${code:02X}, which charset 2 draws as a letter")
 
 
+def test_no_letter_lookalike_fallbacks():
+    """Claude Code's bullets and spinners must not render as letters.
+
+    The substitute table maps the whole circle family to "o" and the asterisk
+    family to "*", which on screen reads as a word character in the middle of a
+    sentence - "o AUTOBOOT OK" was showing on the real machine. Every one of
+    these must resolve to a drawn glyph or a real PETSCII shape instead.
+    """
+    import font
+
+    LETTER_LOOKALIKES = {
+        petscii.to_screen_code("o"), petscii.to_screen_code("O"),
+        petscii.to_screen_code("*"), petscii.to_screen_code("y"),
+        petscii.to_screen_code("x"), petscii.to_screen_code("|"),
+    }
+    # Everything Claude Code has been observed to emit as a marker.
+    MARKERS = "⏺●○◉⏹•‣✳✻✶✷✴✽❯›→▸▶↳⎿⏱⏸✓✗…·←"
+    bad = []
+    for ch in MARKERS:
+        code = petscii.to_screen_code(ch)
+        if code in LETTER_LOOKALIKES and ch not in petscii.GLYPHS:
+            bad.append(f"U+{ord(ch):04X} {ch!r} -> ${code:02X}")
+    check(not bad,
+          "these render as letter/ASCII lookalikes: " + ", ".join(bad))
+
+    # And none of them may fall through to '?'.
+    unknown = [f"U+{ord(c):04X} {c!r}" for c in MARKERS
+               if petscii.to_screen_code(c) == 0x3F]
+    check(not unknown, "unmapped markers: " + ", ".join(unknown))
+
+
+def test_glyph_aliases_point_at_real_glyphs():
+    """Every alias must resolve to a slot that actually has a bitmap."""
+    import font
+
+    for alias, target in font.ALIASES.items():
+        if alias not in font.CODES:
+            continue                      # target is plain PETSCII, fine
+        code = font.CODES[alias]
+        check(code in font.BITMAPS,
+              f"alias {alias!r} -> ${code:02X} has no bitmap")
+        check(font.CODES[alias] == font.CODES[target],
+              f"alias {alias!r} does not match its target {target!r}")
+
+
+def test_accented_letters_fold_to_their_base(): 
+    """"Sautéed" must not render as "Saut?ed".
+
+    Claude Code reaches for words with accents, and a '?' mid-word reads as
+    corruption rather than as a missing accent. Everything here has to land on
+    the base letter, one cell wide so columns stay aligned.
+    """
+    inv = petscii.inverse_map()
+    cases = {
+        "é": "e", "è": "e", "ê": "e", "ë": "e",
+        "á": "a", "à": "a", "â": "a", "ä": "a", "å": "a",
+        "í": "i", "ó": "o", "ô": "o", "ö": "o", "ú": "u", "ü": "u",
+        "ñ": "n", "ç": "c", "ý": "y",
+        "É": "E", "Ü": "U", "Ñ": "N",
+        "ø": "o", "æ": "a", "œ": "o", "ß": "s", "ł": "l", "þ": "t",
+    }
+    bad = []
+    for ch, want in cases.items():
+        got = inv.get(petscii.to_screen_code(ch))
+        if got != want:
+            bad.append(f"{ch!r}->{got!r} (want {want!r})")
+    check(not bad, "accent folding wrong for: " + ", ".join(bad))
+
+
 def test_colors_map_to_claude_identity():
     # The logo shade is chosen, not nearest-matched: its real salmon lands on
     # grey, which is indistinguishable from body text on an RGBI monitor.

@@ -252,6 +252,33 @@ GLYPH_ART = {
 }
 
 
+# Characters that should render as an existing glyph rather than consume a slot
+# of their own. Claude Code picks from a family of circles and asterisks
+# depending on state, and any of them left uncovered falls back to a letter "o"
+# or an "*", which is what was showing on the real machine.
+ALIASES = {
+    "●": "⏺",    # black circle -> the filled bullet
+    "○": "◉",    # white circle -> the fisheye outline
+    "⏹": "⏺",    # stop
+    "•": "·",    # bullet -> middle dot
+    "‣": "❯",    # triangular bullet
+    "✻": "✳",    # teardrop asterisk -> the Claude asterisk
+    "✶": "✳",
+    "✷": "✳",
+    "✴": "✳",    # eight-pointed
+    "✽": "✳",
+    "★": "✳", "☆": "✳",
+    "→": "❯",    # arrows reuse the chevron
+    "▸": "❯", "▶": "❯", "›": "❯",
+    "↳": "⎿",    # down-then-right -> the result elbow
+    "⌐": "─",
+    "\ue0b0": "│",   # powerline separators are just dividers here
+    "\ue0b1": "│",
+    "\ue0b2": "│",
+    "\ue0b3": "│",
+}
+
+
 def _rows(art: str):
     rows = [line.strip() for line in art.strip().splitlines()]
     if len(rows) != 8:
@@ -277,6 +304,12 @@ for _i, (_ch, _art) in enumerate(GLYPH_ART.items()):
     BITMAPS[_code] = _rows(_art)
 
 LAST_SLOT = FREE_SLOTS[len(GLYPH_ART) - 1]
+
+# Aliases resolve to an already-allocated glyph, or are dropped if their target
+# is a plain PETSCII character that petscii.GLYPHS already handles.
+for _alias, _target in ALIASES.items():
+    if _target in CODES:
+        CODES[_alias] = CODES[_target]
 
 
 def definitions():

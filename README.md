@@ -262,6 +262,20 @@ The boot disk lives on the Ultimate's own storage at `/Usb0/claude-boot.d64`,
 uploaded over **FTP** (anonymous login works); the REST file-upload endpoint is
 unimplemented in firmware 3.11.
 
+**Glyph aliases beat glyph slots.** Claude Code picks its response bullet and
+spinner from a family — `⏺ ● ○ ◉` and `✳ ✻ ✴ ✶`, depending on state — and the
+substitute table folded the whole circle family to the letter `o` and the
+asterisks to `*`, so a real answer rendered as `o AUTOBOOT OK`. `font.ALIASES`
+points the siblings at an already-drawn slot: 38 characters covered by 21
+slots. A viewer must label a shared slot with the glyph it was *drawn* for,
+otherwise an alias wins the name and the prompt chevron gets reported as `›`.
+
+**Accented letters fold, they do not fall back.** Claude Code says things like
+"Sautéed for 3s", and `Saut?ed` reads as corruption rather than as a missing
+accent. NFD-decomposing and dropping the combining marks handles the whole
+range without a table; the handful that are not base-plus-mark (`ø æ œ ß ł þ`)
+get one-cell substitutes so columns stay aligned.
+
 ## Two traps that cost the most time
 
 **Reading the ACIA over DMA destroys the link.** `readmem $DE00` pops a byte off
