@@ -151,9 +151,12 @@ def test_differ_is_smaller_than_full_repaint():
 
 def test_real_claude_capture_renders():
     """The end-to-end path on genuine Claude Code output."""
-    cap = os.path.join(os.path.dirname(__file__), "..", "docs", "claude_clean.raw")
+    root = os.path.join(os.path.dirname(__file__), "..")
+    cap = os.path.join(root, "tests", "fixtures", "render_sample.raw")
     if not os.path.exists(cap):
-        print("  (skipped: no docs/claude_clean.raw capture)")
+        cap = os.path.join(root, "docs", "claude_clean.raw")
+    if not os.path.exists(cap):
+        print("  (skipped: no render fixture)")
         return
     raw = open(cap, "rb").read()
     vt = VTScreen(80, 25)

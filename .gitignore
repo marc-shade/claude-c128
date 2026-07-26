@@ -1,9 +1,15 @@
+# build output
 client/build/
-__pycache__/
-*.pyc
+
+# logs and captures from local runs
 *.log
 *.raw
+!tests/fixtures/*.raw
 ptyraw.bin
+
+# python
+__pycache__/
+*.pyc
 
 # Bind-mount artifacts the Claude Code Bash sandbox creates in every working
 # directory. Both are /dev/null character devices, not real files, and git

@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host:
+    name: host tests and Unicode coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install pyte
+        run: pip install pyte
+
+      # VICE ships the C128 character ROM, which the glyph table is verified
+      # against, plus c1541 and petcat. cc65 builds the 6502 client.
+      - name: install VICE and cc65
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y vice cc65
+
+      - name: locate the character ROM
+        run: |
+          python3 -c "
+          import sys; sys.path.insert(0, 'server')
+          import petscii
+          print('ROM:', petscii.ROM_PATH)
+          ok, errs = petscii.verify_against_rom()
+          print('verified' if ok else errs)
+          sys.exit(0 if ok else 1)"
+
+      - name: unit tests
+        run: make test
+
+      - name: Unicode coverage
+        run: make coverage
+
+      - name: build the 6502 client
+        run: make disk
+
+      - name: render a sample session
+        run: |
+          python3 tools/charaudit.py \
+            --capture tests/fixtures/render_sample.raw --strict
+
+  emulator:
+    name: 6502 client end to end in VICE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install pyte
+        run: pip install pyte
+
+      - name: install VICE, cc65 and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y vice cc65 xvfb
+
+      - name: build the client and boot disk
+        run: make disk
+
+      # Boots the real client binary in VICE with the ACIA wired to the bridge,
+      # then reads the emulated VDC back through VICE's monitor.
+      - name: end to end
+        run: make emu

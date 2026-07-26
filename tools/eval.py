@@ -58,9 +58,11 @@ def check_coverage():
 
 def check_render():
     """A real captured session must survive ANSI -> PETSCII -> wire -> screen."""
-    cap = os.path.join(ROOT, "docs", "claude_clean.raw")
+    cap = os.path.join(ROOT, "tests", "fixtures", "render_sample.raw")
     if not os.path.exists(cap):
-        return SKIP, "no docs/claude_clean.raw fixture"
+        cap = os.path.join(ROOT, "docs", "claude_clean.raw")
+    if not os.path.exists(cap):
+        return SKIP, "no render fixture"
     rc, out = run([sys.executable, "tools/charaudit.py", "--capture", cap,
                    "--strict"], timeout=120)
     first = out.splitlines()[0] if out else ""

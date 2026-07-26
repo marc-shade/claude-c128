@@ -10,11 +10,12 @@ and drops the modem to command mode.
   python3 tools/hwtype.py --key return
 """
 import argparse
+import os
 import sys
 import time
 import urllib.request
 
-HOST = "192.168.1.237"
+HOST = os.environ.get("CBM_ULTIMATE_HOST", "192.168.1.237")
 KBUF, NDX = 0x034A, 0x00D0
 CHUNK = 10                      # the C128 keyboard buffer holds ten bytes
 

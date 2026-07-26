@@ -7,9 +7,14 @@ synthesize for the Unicode glyphs Claude Code actually emits. Exact matches are
 facts about the ROM; anything unmatched is reported so it gets a deliberate
 substitute instead of a silent wrong glyph.
 """
+import os
 import sys
 
-ROM = "/usr/share/vice/C128/chargen-390059-01.bin"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "server"))
+import petscii   # noqa: E402
+
+ROM = petscii.ROM_PATH or ""
 SET_OFFSET = 0x0000          # C128 mode, uppercase/graphics set
 NCHARS = 256
 

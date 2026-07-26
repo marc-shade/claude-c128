@@ -10,12 +10,44 @@ is readable. That set keeps the box-drawing and block glyphs at $40, $5B-$5D,
 $6B-$73, $7B-$7F and $A0+, and gives up only codes $41-$5A, which become A-Z.
 """
 
+import os
 import unicodedata
 
 import derive
 import font
 
-ROM_PATH = "/usr/share/vice/C128/chargen-390059-01.bin"
+# The C128 character ROM, shipped with VICE. Distributions put it in different
+# places and the file has several revisions, so candidates are searched rather
+# than assumed; CBM_CHARGEN overrides.
+ROM_CANDIDATES = (
+    "/usr/share/vice/C128/chargen-390059-01.bin",
+    "/usr/share/vice/C128/chargen-315079-01.bin",
+    "/usr/local/share/vice/C128/chargen-390059-01.bin",
+    "/opt/homebrew/share/vice/C128/chargen-390059-01.bin",
+    "/usr/lib/vice/C128/chargen-390059-01.bin",
+)
+
+
+def find_rom():
+    """Path to a C128 character ROM, or None if VICE is not installed."""
+    override = os.environ.get("CBM_CHARGEN")
+    if override:
+        return override if os.path.exists(override) else None
+    for path in ROM_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    # Any chargen in a VICE C128 directory will do for the glyphs we check.
+    for base in ("/usr/share/vice", "/usr/local/share/vice",
+                 "/opt/homebrew/share/vice", "/usr/lib/vice"):
+        d = os.path.join(base, "C128")
+        if os.path.isdir(d):
+            for name in sorted(os.listdir(d)):
+                if name.startswith("chargen") and name.endswith(".bin"):
+                    return os.path.join(d, name)
+    return None
+
+
+ROM_PATH = find_rom()
 CHARSET2_OFFSET = 0x0800          # lowercase/uppercase set, C128 mode
 
 # ---------------------------------------------------------------------------
@@ -394,12 +426,11 @@ def inverse_map():
 
 
 # ---------------------------------------------------------------------------
-def verify_against_rom(rom_path: str = ROM_PATH):
+def verify_against_rom(rom_path: str = None):
     """Re-derive every GLYPHS entry from the ROM bitmap. Returns (ok, errors)."""
-    import os
-
-    if not os.path.exists(rom_path):
-        return False, [f"character ROM not found at {rom_path}"]
+    rom_path = rom_path or ROM_PATH
+    if not rom_path or not os.path.exists(rom_path):
+        return False, ["character ROM not found; install VICE or set CBM_CHARGEN"]
     data = open(rom_path, "rb").read()
     chars = [
         tuple(data[CHARSET2_OFFSET + c * 8: CHARSET2_OFFSET + c * 8 + 8])

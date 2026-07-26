@@ -16,12 +16,13 @@ Reading $DE00-$DE03 over DMA pops bytes off the 6551's receive register and
 would corrupt a live session; ordinary RAM is safe to read.
 """
 import argparse
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
-HOST = "192.168.1.237"
+HOST = os.environ.get("CBM_ULTIMATE_HOST", "192.168.1.237")
 VIC_SCREEN = 0x0400
 BOOT_IMAGE = "/Usb0/claude-boot.d64"
 
